@@ -22,7 +22,18 @@ git clone https://github.com/SummittDweller/gpx-routes-workbench-using-flet.git
 cd gpx-routes-workbench-using-flet
 ```
 
-2. Install dependencies:
+2. Create and activate a virtual environment:
+```bash
+# Create virtual environment
+python3 -m venv .venv
+
+# Activate virtual environment
+source .venv/bin/activate  # On macOS/Linux
+# or
+.venv\Scripts\activate     # On Windows
+```
+
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
@@ -43,18 +54,23 @@ The application will open in a new window or web browser.
 2. Tap your profile picture or initials in the top right
 3. Scroll down and tap "**Export All Health Data**"
 4. Wait for the export to complete (may take several minutes)
-5. Share the `export.zip` file to your computer (via AirDrop, email, or cloud storage)
+5. Save the `export.zip` file to your **Downloads** folder on your computer
+
+**✨ AUTO-IMPORT**: If `export.zip` is in your `~/Downloads` folder when you launch the app, the workout routes will be automatically extracted to the temporary directory!
+
+Alternatively, you can manually:
+
 6. Extract the `export.zip` file on your computer
 7. Inside the extracted folder, look for the **workout-routes** folder
 8. Use the file picker in the app to import GPX files from the workout-routes folder
 
 ### Processing Routes
 
-1. **Import Files**: Click "📁 Select GPX Files" to import route files into the temporary directory
+1. **Import Files**: Routes are auto-imported from `~/Downloads/export.zip`, or click "📁 Select GPX Files" to manually import
 2. **Select Routes**: Use checkboxes to select which routes to process, or use "Select All"/"Deselect All"
 3. **Visualize**: Click "🗺️ Visualize Routes" to create an interactive map (saved as HTML)
 4. **Add Speed Tags**: Click "⚡ Add Speed Tags" to calculate speed between points
-5. **Trim by Speed**: Set max speed threshold and click "✂️ Trim by Speed" to remove outliers
+5. **Trim by Speed**: Set max speed threshold in mph (default: 5 mph) and click "✂️ Trim by Speed" to remove slow-moving GPS drift points
 6. **Post to Hikes**: Enter your Hikes API URL and click "📤 Post to Hikes"
 
 ## File Structure
@@ -92,7 +108,7 @@ Calculates speed between consecutive points based on:
 - Speed stored in meters per second (m/s)
 
 ### Speed-Based Trimming
-Removes GPS points with unrealistic speeds (default: 50 m/s ≈ 180 km/h). Useful for filtering out GPS errors.
+Removes GPS points with unrealistic speeds. Default threshold is 5 mph, which helps filter out GPS drift and errors when the device is stationary or moving very slowly. Useful for cleaning up routes where the GPS recorded movement while you were actually standing still.
 
 ## Testing
 

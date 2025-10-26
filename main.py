@@ -9,7 +9,8 @@ import json
 import os
 import shutil
 import zipfile
-from datetime import datetime
+import webbrowser
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 import gpxpy
@@ -108,8 +109,9 @@ class GPXProcessor:
         return gpx
     
     @staticmethod
+    @staticmethod
     def trim_by_speed(gpx: gpxpy.gpx.GPX, max_speed: float = 50.0) -> gpxpy.gpx.GPX:
-        """Remove points with excessive speed (default: 50 m/s ~= 180 km/h)"""
+        """Remove points with excessive speed (max_speed in m/s, UI uses mph)"""
         removed_count = 0
         for track in gpx.tracks:
             for segment in track.segments:
@@ -177,7 +179,73 @@ class GPXWorkbenchApp:
         self.status_text = ft.Text("Ready", size=14)
         self.map_output = ft.Text("", size=12)
         
+        # Auto-extract export.zip from Downloads if found
+        self.auto_extract_health_export()
+        
         self.build_ui()
+    
+    def auto_extract_health_export(self):
+        """Automatically check for and extract export.zip from Downloads folder"""
+        try:
+            # Check if GPX files already exist in temp directory
+            if os.path.exists(self.temp_dir):
+                existing_gpx = [f for f in os.listdir(self.temp_dir) if f.endswith('.gpx')]
+                if existing_gpx:
+                    logger.info(f"Skipping auto-extraction: {len(existing_gpx)} GPX files already exist in temp directory")
+                    return
+            
+            # Get the user's home directory and construct Downloads path
+            downloads_path = Path.home() / "Downloads" / "export.zip"
+            
+            if not downloads_path.exists():
+                logger.info("No export.zip found in Downloads folder")
+                return
+            
+            logger.info(f"Found export.zip at {downloads_path}")
+            
+            # Extract to a temporary location
+            extract_dir = Path(self.temp_dir) / "health_export_temp"
+            
+            # Remove old extraction if exists
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir)
+            
+            logger.info("Extracting export.zip...")
+            with zipfile.ZipFile(downloads_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            
+            # Look for workout-routes folder
+            workout_routes_path = extract_dir / "apple_health_export" / "workout-routes"
+            
+            if not workout_routes_path.exists():
+                logger.warning(f"workout-routes folder not found in export.zip")
+                # Clean up
+                shutil.rmtree(extract_dir)
+                return
+            
+            # Copy all GPX files from workout-routes to temp directory
+            gpx_files = list(workout_routes_path.glob("*.gpx"))
+            copied_count = 0
+            
+            for gpx_file in gpx_files:
+                try:
+                    dest_path = Path(self.temp_dir) / gpx_file.name
+                    shutil.copy2(gpx_file, dest_path)
+                    copied_count += 1
+                except Exception as e:
+                    logger.error(f"Error copying {gpx_file.name}: {e}")
+            
+            logger.info(f"Extracted {copied_count} GPX files from export.zip")
+            
+            # Clean up extraction directory
+            shutil.rmtree(extract_dir)
+            
+            # Update the status in the UI if it's ready
+            if hasattr(self, 'status_text'):
+                self.update_status(f"Auto-extracted {copied_count} routes from Downloads/export.zip")
+            
+        except Exception as e:
+            logger.error(f"Error auto-extracting health export: {e}")
     
     def build_ui(self):
         """Build the user interface"""
@@ -188,7 +256,7 @@ class GPXWorkbenchApp:
                 "GPX Routes Workbench",
                 size=32,
                 weight=ft.FontWeight.BOLD,
-                color=ft.colors.BLUE_700
+                color=ft.Colors.BLUE_700
             ),
             padding=10
         )
@@ -209,7 +277,7 @@ class GPXWorkbenchApp:
         status_bar = ft.Container(
             content=self.status_text,
             padding=10,
-            bgcolor=ft.colors.GREY_200,
+            bgcolor=ft.Colors.GREY_200,
             border_radius=5
         )
         
@@ -228,7 +296,7 @@ class GPXWorkbenchApp:
             status_bar
         )
     
-    def create_instructions_section(self) -> ft.Container:
+    def create_instructions_section(self) -> ft.Column:
         """Create instructions for exporting iPhone health data"""
         instructions_text = """
 How to Export Health Data from Your iPhone:
@@ -237,7 +305,12 @@ How to Export Health Data from Your iPhone:
 2. Tap your profile picture or initials in the top right
 3. Scroll down and tap "Export All Health Data"
 4. Wait for the export to complete (may take several minutes)
-5. Share the export.zip file to your computer (via AirDrop, email, or cloud storage)
+5. Save the export.zip file to your Downloads folder on your computer
+
+✨ AUTO-IMPORT: If export.zip is in your ~/Downloads folder when you launch this app,
+   the workout routes will be automatically extracted to the temp directory!
+
+Alternatively, you can manually:
 6. Extract the export.zip file on your computer
 7. Inside the extracted folder, look for the "workout-routes" folder
 8. Use the file picker below to select and import the GPX route files
@@ -245,17 +318,53 @@ How to Export Health Data from Your iPhone:
 Note: The workout-routes folder contains individual .gpx files for each recorded workout with GPS data.
         """
         
-        return ft.Container(
-            content=ft.Column([
-                ft.Text("📱 iPhone Health Data Export Instructions", 
-                       size=20, weight=ft.FontWeight.BOLD, color=ft.colors.GREEN_700),
-                ft.Text(instructions_text, size=14, selectable=True),
-            ]),
-            padding=15,
-            bgcolor=ft.colors.GREEN_50,
-            border_radius=10,
-            border=ft.border.all(2, ft.colors.GREEN_200)
+        # Check if GPX files exist to determine initial collapsed state
+        has_gpx_files = False
+        if os.path.exists(self.temp_dir):
+            existing_gpx = [f for f in os.listdir(self.temp_dir) if f.endswith('.gpx')]
+            has_gpx_files = len(existing_gpx) > 0
+        
+        # Create the instructions content container
+        self.instructions_content = ft.Container(
+            content=ft.Text(instructions_text, size=14, selectable=True),
+            padding=10,
+            visible=not has_gpx_files  # Hidden if files exist, visible if empty
         )
+        
+        # Create toggle button
+        self.instructions_toggle_icon = ft.Icon(
+            ft.Icons.EXPAND_MORE if not has_gpx_files else ft.Icons.EXPAND_LESS,
+            color=ft.Colors.GREEN_700
+        )
+        
+        def toggle_instructions(e):
+            self.instructions_content.visible = not self.instructions_content.visible
+            self.instructions_toggle_icon.name = ft.Icons.EXPAND_LESS if self.instructions_content.visible else ft.Icons.EXPAND_MORE
+            self.page.update()
+        
+        # Create header with click to expand/collapse
+        instructions_header = ft.Container(
+            content=ft.Row([
+                self.instructions_toggle_icon,
+                ft.Text("📱 iPhone Health Data Export Instructions", 
+                       size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_700),
+                ft.Text("(click to expand/collapse)", size=12, color=ft.Colors.GREEN_600, italic=True),
+            ], spacing=10),
+            on_click=toggle_instructions,
+            padding=10,
+        )
+        
+        return ft.Column([
+            ft.Container(
+                content=ft.Column([
+                    instructions_header,
+                    self.instructions_content,
+                ]),
+                bgcolor=ft.Colors.GREEN_50,
+                border_radius=10,
+                border=ft.border.all(2, ft.Colors.GREEN_200)
+            )
+        ])
     
     def create_file_picker_section(self) -> ft.Container:
         """Create file picker section"""
@@ -266,24 +375,55 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         
         pick_files_button = ft.ElevatedButton(
             "📁 Select GPX Files",
-            icon=ft.icons.FILE_OPEN,
+            icon=ft.Icons.FILE_OPEN,
             on_click=lambda _: self.pick_files_dialog.pick_files(
                 allowed_extensions=["gpx"],
                 allow_multiple=True
             ),
             style=ft.ButtonStyle(
-                color=ft.colors.WHITE,
-                bgcolor=ft.colors.BLUE_700
+                color=ft.Colors.WHITE,
+                bgcolor=ft.Colors.BLUE_700
             )
         )
         
         clear_temp_button = ft.ElevatedButton(
             "🗑️ Clear Temp Directory",
-            icon=ft.icons.DELETE,
+            icon=ft.Icons.DELETE,
             on_click=self.clear_temp_directory,
             style=ft.ButtonStyle(
-                color=ft.colors.WHITE,
-                bgcolor=ft.colors.RED_700
+                color=ft.Colors.WHITE,
+                bgcolor=ft.Colors.RED_700
+            )
+        )
+        
+        # Date picker for removing old files
+        self.cutoff_date_picker = ft.DatePicker(
+            on_change=self.on_cutoff_date_changed,
+            on_dismiss=lambda e: None,
+        )
+        self.page.overlay.append(self.cutoff_date_picker)
+        
+        # Default to 30 days ago
+        default_date = datetime.now() - timedelta(days=30)
+        self.selected_cutoff_date = default_date
+        
+        self.cutoff_date_button = ft.ElevatedButton(
+            f"📅 {default_date.strftime('%Y-%m-%d')}",
+            on_click=lambda _: self.cutoff_date_picker.pick_date(),
+            tooltip="Select cutoff date",
+            style=ft.ButtonStyle(
+                bgcolor=ft.Colors.GREY_300
+            )
+        )
+        
+        remove_old_button = ft.ElevatedButton(
+            "🧹 Remove Files Before Date",
+            icon=ft.Icons.DELETE_SWEEP,
+            on_click=self.remove_files_before_date,
+            tooltip="Remove all GPX files older than the selected date",
+            style=ft.ButtonStyle(
+                color=ft.Colors.WHITE,
+                bgcolor=ft.Colors.ORANGE_700
             )
         )
         
@@ -291,10 +431,15 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             content=ft.Column([
                 ft.Text("Import GPX Files", size=20, weight=ft.FontWeight.BOLD),
                 ft.Row([pick_files_button, clear_temp_button], spacing=10),
+                ft.Row([
+                    ft.Text("Remove old files:", size=14),
+                    self.cutoff_date_button,
+                    remove_old_button
+                ], spacing=10),
                 ft.Text(f"Temp directory: {self.temp_dir}", size=12, italic=True)
             ]),
             padding=15,
-            bgcolor=ft.colors.BLUE_50,
+            bgcolor=ft.Colors.BLUE_50,
             border_radius=10
         )
     
@@ -303,19 +448,19 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         
         select_all_button = ft.ElevatedButton(
             "Select All",
-            icon=ft.icons.CHECK_BOX,
+            icon=ft.Icons.CHECK_BOX,
             on_click=self.select_all_files
         )
         
         deselect_all_button = ft.ElevatedButton(
             "Deselect All",
-            icon=ft.icons.CHECK_BOX_OUTLINE_BLANK,
+            icon=ft.Icons.CHECK_BOX_OUTLINE_BLANK,
             on_click=self.deselect_all_files
         )
         
         refresh_button = ft.ElevatedButton(
             "🔄 Refresh List",
-            icon=ft.icons.REFRESH,
+            icon=ft.Icons.REFRESH,
             on_click=self.refresh_file_list
         )
         
@@ -326,13 +471,13 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                 ft.Container(
                     content=self.files_list_view,
                     height=200,
-                    border=ft.border.all(1, ft.colors.GREY_400),
+                    border=ft.border.all(1, ft.Colors.GREY_400),
                     border_radius=5,
                     padding=5
                 )
             ]),
             padding=15,
-            bgcolor=ft.colors.GREY_50,
+            bgcolor=ft.Colors.GREY_50,
             border_radius=10
         )
     
@@ -341,38 +486,44 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         
         map_button = ft.ElevatedButton(
             "🗺️ Visualize Routes",
-            icon=ft.icons.MAP,
+            icon=ft.Icons.MAP,
             on_click=self.visualize_routes,
             style=ft.ButtonStyle(
-                color=ft.colors.WHITE,
-                bgcolor=ft.colors.PURPLE_700
+                color=ft.Colors.WHITE,
+                bgcolor=ft.Colors.PURPLE_700
             )
+        )
+        
+        self.auto_open_map_checkbox = ft.Checkbox(
+            label="Auto-open in browser",
+            value=True,
+            tooltip="Automatically open the map in your default browser after creation"
         )
         
         add_speed_button = ft.ElevatedButton(
             "⚡ Add Speed Tags",
-            icon=ft.icons.SPEED,
+            icon=ft.Icons.SPEED,
             on_click=self.add_speed_tags,
             style=ft.ButtonStyle(
-                color=ft.colors.WHITE,
-                bgcolor=ft.colors.ORANGE_700
+                color=ft.Colors.WHITE,
+                bgcolor=ft.Colors.ORANGE_700
             )
         )
         
         self.max_speed_field = ft.TextField(
-            label="Max Speed (m/s)",
-            value="50",
+            label="Max Speed (MPH)",
+            value="5",
             width=150,
-            hint_text="Default: 50 m/s"
+            hint_text="Default: 5 mph"
         )
         
         trim_button = ft.ElevatedButton(
             "✂️ Trim by Speed",
-            icon=ft.icons.CONTENT_CUT,
+            icon=ft.Icons.CONTENT_CUT,
             on_click=self.trim_by_speed,
             style=ft.ButtonStyle(
-                color=ft.colors.WHITE,
-                bgcolor=ft.colors.TEAL_700
+                color=ft.Colors.WHITE,
+                bgcolor=ft.Colors.TEAL_700
             )
         )
         
@@ -385,24 +536,24 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         
         post_hikes_button = ft.ElevatedButton(
             "📤 Post to Hikes",
-            icon=ft.icons.UPLOAD,
+            icon=ft.Icons.UPLOAD,
             on_click=self.post_to_hikes,
             style=ft.ButtonStyle(
-                color=ft.colors.WHITE,
-                bgcolor=ft.colors.INDIGO_700
+                color=ft.Colors.WHITE,
+                bgcolor=ft.Colors.INDIGO_700
             )
         )
         
         return ft.Container(
             content=ft.Column([
                 ft.Text("Processing Controls", size=20, weight=ft.FontWeight.BOLD),
-                ft.Row([map_button, add_speed_button], spacing=10),
+                ft.Row([map_button, self.auto_open_map_checkbox, add_speed_button], spacing=10),
                 ft.Row([self.max_speed_field, trim_button], spacing=10),
                 ft.Row([self.hikes_url_field, post_hikes_button], spacing=10),
                 self.map_output
             ]),
             padding=15,
-            bgcolor=ft.colors.AMBER_50,
+            bgcolor=ft.Colors.AMBER_50,
             border_radius=10
         )
     
@@ -437,6 +588,71 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             logger.error(f"Error clearing temp directory: {ex}")
             self.update_status(f"Error: {ex}")
     
+    def on_cutoff_date_changed(self, e):
+        """Handle cutoff date selection"""
+        if e.control.value:
+            self.selected_cutoff_date = e.control.value
+            self.cutoff_date_button.text = f"📅 {self.selected_cutoff_date.strftime('%Y-%m-%d')}"
+            self.page.update()
+            logger.info(f"Cutoff date selected: {self.selected_cutoff_date}")
+    
+    def remove_files_before_date(self, e):
+        """Remove GPX files with dates older than the selected cutoff date"""
+        if not os.path.exists(self.temp_dir):
+            self.update_status("Temp directory does not exist")
+            return
+        
+        try:
+            gpx_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.gpx')]
+            removed_count = 0
+            kept_count = 0
+            
+            for filename in gpx_files:
+                file_date = self._extract_date_from_filename(filename)
+                
+                # Compare dates (ignoring time portion)
+                if file_date.date() < self.selected_cutoff_date.date():
+                    file_path = os.path.join(self.temp_dir, filename)
+                    try:
+                        os.remove(file_path)
+                        removed_count += 1
+                        logger.info(f"Removed old file: {filename} (date: {file_date.date()})")
+                    except Exception as ex:
+                        logger.error(f"Error removing {filename}: {ex}")
+                else:
+                    kept_count += 1
+            
+            self.update_status(f"Removed {removed_count} file(s) before {self.selected_cutoff_date.strftime('%Y-%m-%d')}, kept {kept_count}")
+            self.refresh_file_list(None)
+            
+        except Exception as ex:
+            logger.error(f"Error removing old files: {ex}")
+            self.update_status(f"Error: {ex}")
+    
+    def _extract_date_from_filename(self, filename: str) -> datetime:
+        """Extract datetime from filename for sorting (e.g., route_2025-02-04_9.04am.gpx)"""
+        import re
+        try:
+            # Parse format: route_YYYY-MM-DD_H.MMam/pm.gpx
+            match = re.match(r'route_(\d{4})-(\d{2})-(\d{2})_(\d{1,2})\.(\d{2})(am|pm)\.gpx', filename)
+            if match:
+                year, month, day, hour, minute, period = match.groups()
+                hour = int(hour)
+                # Convert 12-hour to 24-hour format
+                if period == 'pm' and hour != 12:
+                    hour += 12
+                elif period == 'am' and hour == 12:
+                    hour = 0
+                return datetime(int(year), int(month), int(day), hour, int(minute))
+        except Exception as e:
+            logger.warning(f"Could not parse date from filename {filename}: {e}")
+        
+        # Fallback to file modification time if parsing fails
+        try:
+            return datetime.fromtimestamp(os.path.getmtime(os.path.join(self.temp_dir, filename)))
+        except:
+            return datetime.min
+    
     def refresh_file_list(self, e):
         """Refresh the list of GPX files"""
         self.files_list_view.controls.clear()
@@ -447,11 +663,13 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             return
         
         gpx_files = [f for f in os.listdir(self.temp_dir) if f.endswith('.gpx')]
-        gpx_files.sort()
+        
+        # Sort by date extracted from filename in reverse chronological order (newest first)
+        gpx_files.sort(key=self._extract_date_from_filename, reverse=True)
         
         if not gpx_files:
             self.files_list_view.controls.append(
-                ft.Text("No GPX files found in temp directory", italic=True, color=ft.colors.GREY_700)
+                ft.Text("No GPX files found in temp directory", italic=True, color=ft.Colors.GREY_700)
             )
         else:
             for filename in gpx_files:
@@ -462,6 +680,13 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                 )
                 self.file_checkboxes[filename] = checkbox
                 self.files_list_view.controls.append(checkbox)
+        
+        # Update instructions expansion state based on whether files exist
+        if hasattr(self, 'instructions_content'):
+            should_show = len(gpx_files) == 0
+            self.instructions_content.visible = should_show
+            if hasattr(self, 'instructions_toggle_icon'):
+                self.instructions_toggle_icon.name = ft.Icons.EXPAND_LESS if should_show else ft.Icons.EXPAND_MORE
         
         self.page.update()
         logger.info(f"File list refreshed: {len(gpx_files)} files found")
@@ -529,8 +754,14 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                             for track in gpx_data.tracks:
                                 for segment in track.segments:
                                     points = [(point.latitude, point.longitude) for point in segment.points]
-                                    folium.PolyLine(points, color=color, weight=3, opacity=0.7, 
-                                                   popup=filename).add_to(m)
+                                    folium.PolyLine(
+                                        points, 
+                                        color=color, 
+                                        weight=3, 
+                                        opacity=0.7, 
+                                        popup=filename,
+                                        tooltip=filename  # Add hover text showing filename
+                                    ).add_to(m)
                     
                     # Save map
                     map_file = os.path.join(self.temp_dir, "routes_map.html")
@@ -539,6 +770,16 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                     self.update_status(f"Map created: {map_file}")
                     self.map_output.value = f"✅ Map saved to: {map_file}\nOpen this file in a web browser to view the routes."
                     logger.info(f"Map created with {len(self.selected_files)} routes")
+                    
+                    # Auto-open in browser if checkbox is checked
+                    if self.auto_open_map_checkbox.value:
+                        try:
+                            webbrowser.open(f"file://{os.path.abspath(map_file)}")
+                            logger.info("Opened map in browser")
+                            self.map_output.value = f"✅ Map saved and opened in browser: {map_file}"
+                        except Exception as browser_error:
+                            logger.warning(f"Could not auto-open browser: {browser_error}")
+                    
                 else:
                     self.update_status("Could not determine route bounds")
             else:
@@ -581,7 +822,9 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             return
         
         try:
-            max_speed = float(self.max_speed_field.value)
+            max_speed_mph = float(self.max_speed_field.value)
+            # Convert MPH to m/s (1 mph = 0.44704 m/s)
+            max_speed_ms = max_speed_mph * 0.44704
         except ValueError:
             self.update_status("Invalid max speed value")
             return
@@ -595,8 +838,8 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             if gpx:
                 # First add speed if not present
                 gpx = self.processor.calculate_speed(gpx)
-                # Then trim
-                gpx = self.processor.trim_by_speed(gpx, max_speed)
+                # Then trim (using m/s internally)
+                gpx = self.processor.trim_by_speed(gpx, max_speed_ms)
                 
                 # Save with _trimmed suffix
                 new_filename = filename.replace('.gpx', '_trimmed.gpx')
@@ -604,7 +847,7 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                 self.processor.save_gpx(gpx, new_path)
                 processed_count += 1
         
-        self.update_status(f"Trimmed {processed_count} file(s) by speed")
+        self.update_status(f"Trimmed {processed_count} file(s) by speed (max: {max_speed_mph} mph)")
         self.refresh_file_list(None)
     
     def post_to_hikes(self, e):
