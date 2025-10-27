@@ -71,59 +71,192 @@ class GPXProcessor:
     """Handles GPX file processing operations"""
     
     @staticmethod
-    def parse_gpx(file_path: str) -> Optional[gpxpy.gpx.GPX]:
-        """Parse a GPX file"""
+    def parse_gpx(file_path: str, auto_add_speed: bool = False) -> Optional[gpxpy.gpx.GPX]:
+        """Parse a GPX file and optionally add speed tags automatically"""
         try:
             with open(file_path, 'r') as gpx_file:
                 gpx = gpxpy.parse(gpx_file)
                 logger.info(f"Successfully parsed {file_path}")
+                
+                # Automatically add speed and distance tags if requested and not present
+                if auto_add_speed and not GPXProcessor.has_speed_and_distance_tags(gpx):
+                    logger.info(f"Auto-adding speed tags to {file_path}")
+                    gpx = GPXProcessor.calculate_speed(gpx)
+                    # Save the updated file
+                    GPXProcessor.save_gpx(gpx, file_path)
+                    logger.info(f"Speed tags auto-saved to {file_path}")
+                
                 return gpx
         except Exception as e:
             logger.error(f"Error parsing GPX file {file_path}: {e}")
             return None
     
     @staticmethod
+    def has_speed_and_distance_tags(gpx: gpxpy.gpx.GPX) -> bool:
+        """Check if GPX already has speed and distance-to-next tags"""
+        for track in gpx.tracks:
+            for segment in track.segments:
+                if len(segment.points) > 1:
+                    # Check first few points for speed and distance-to-next
+                    for i, point in enumerate(segment.points[:3]):  # Check first 3 points
+                        # Check for speed (should be present for points after the first)
+                        if i > 0:
+                            has_speed = point.speed is not None
+                            # Also check in extensions
+                            if not has_speed and hasattr(point, 'extensions') and point.extensions:
+                                for ext in point.extensions:
+                                    if hasattr(ext, 'tag') and 'speed' in ext.tag:
+                                        has_speed = True
+                                        break
+                            if not has_speed:
+                                return False
+                        
+                        # Check for distance-to-next (should be present for all but last point)
+                        if i < len(segment.points) - 1:
+                            has_distance = False
+                            if hasattr(point, 'extensions') and point.extensions:
+                                for ext in point.extensions:
+                                    if hasattr(ext, 'tag') and 'distance-to-next' in ext.tag:
+                                        has_distance = True
+                                        break
+                            if not has_distance:
+                                return False
+        return True
+    
+    @staticmethod
+    def get_max_speed_and_distance(gpx: gpxpy.gpx.GPX) -> tuple[Optional[float], Optional[float]]:
+        """Get maximum speed (m/s) and maximum distance-to-next (meters) from GPX file
+        Returns: (max_speed_ms, max_distance_meters) or (None, None) if no tags found"""
+        max_speed = None
+        max_distance = None
+        
+        for track in gpx.tracks:
+            for segment in track.segments:
+                for point in segment.points:
+                    # Check for speed in both attribute and extensions
+                    speed_value = None
+                    if point.speed is not None:
+                        speed_value = point.speed
+                    elif hasattr(point, 'extensions') and point.extensions:
+                        for ext in point.extensions:
+                            if hasattr(ext, 'tag') and 'speed' in ext.tag:
+                                try:
+                                    speed_value = float(ext.text)
+                                    break
+                                except (ValueError, AttributeError):
+                                    pass
+                    
+                    if speed_value is not None:
+                        if max_speed is None or speed_value > max_speed:
+                            max_speed = speed_value
+                    
+                    # Check for distance-to-next in extensions
+                    if hasattr(point, 'extensions') and point.extensions:
+                        for ext in point.extensions:
+                            if hasattr(ext, 'tag') and 'distance-to-next' in ext.tag:
+                                try:
+                                    distance = float(ext.text)
+                                    if max_distance is None or distance > max_distance:
+                                        max_distance = distance
+                                except (ValueError, AttributeError):
+                                    pass
+        
+        return max_speed, max_distance
+    
+    @staticmethod
     def calculate_speed(gpx: gpxpy.gpx.GPX) -> gpxpy.gpx.GPX:
-        """Add speed tags to GPX trackpoints"""
+        """Add speed tags and distance-to-next extension to GPX trackpoints"""
         for track in gpx.tracks:
             for segment in track.segments:
                 points = segment.points
-                for i in range(1, len(points)):
-                    prev_point = points[i - 1]
+                for i in range(len(points)):
                     curr_point = points[i]
                     
-                    # Calculate distance and time
-                    distance = curr_point.distance_3d(prev_point)
-                    if distance is None:
-                        distance = curr_point.distance_2d(prev_point)
+                    # Calculate speed from previous point (for points after the first)
+                    if i > 0:
+                        prev_point = points[i - 1]
+                        
+                        # Calculate distance and time
+                        distance = curr_point.distance_3d(prev_point)
+                        if distance is None:
+                            distance = curr_point.distance_2d(prev_point)
+                        
+                        time_diff = (curr_point.time - prev_point.time).total_seconds() if curr_point.time and prev_point.time else 0
+                        
+                        # Calculate speed (m/s)
+                        if time_diff > 0 and distance is not None:
+                            speed = distance / time_diff
+                            # Add speed as extension (m/s)
+                            curr_point.speed = speed
                     
-                    time_diff = (curr_point.time - prev_point.time).total_seconds() if curr_point.time and prev_point.time else 0
-                    
-                    # Calculate speed (m/s)
-                    if time_diff > 0 and distance is not None:
-                        speed = distance / time_diff
-                        # Add speed as extension (m/s)
-                        curr_point.speed = speed
+                    # Calculate distance to next point (for all points except the last)
+                    if i < len(points) - 1:
+                        next_point = points[i + 1]
+                        
+                        # Calculate distance to next point
+                        distance_to_next = next_point.distance_3d(curr_point)
+                        if distance_to_next is None:
+                            distance_to_next = next_point.distance_2d(curr_point)
+                        
+                        # Add distance-to-next as extension
+                        if distance_to_next is not None:
+                            # Create extensions element if it doesn't exist
+                            if not hasattr(curr_point, 'extensions') or curr_point.extensions is None:
+                                curr_point.extensions = []
+                            
+                            # Create the extension element
+                            from xml.etree import ElementTree as ET
+                            distance_elem = ET.Element('distance-to-next')
+                            distance_elem.text = str(distance_to_next)
+                            curr_point.extensions.append(distance_elem)
         
-        logger.info("Speed tags added to GPX")
+        logger.info("Speed tags and distance-to-next extensions added to GPX")
         return gpx
     
     @staticmethod
-    @staticmethod
     def trim_by_speed(gpx: gpxpy.gpx.GPX, max_speed: float = 50.0) -> gpxpy.gpx.GPX:
-        """Remove points with excessive speed (max_speed in m/s, UI uses mph)"""
+        """Remove points with excessive speed (max_speed in m/s, UI uses mph)
+        If 5 or more consecutive points exceed threshold, trim those and all following points."""
         removed_count = 0
         for track in gpx.tracks:
             for segment in track.segments:
                 points_to_keep = []
-                for point in segment.points:
+                consecutive_high_speed = 0
+                trim_all_remaining = False
+                
+                for i, point in enumerate(segment.points):
+                    # If we've decided to trim all remaining points, skip this point
+                    if trim_all_remaining:
+                        removed_count += 1
+                        continue
+                    
                     if hasattr(point, 'speed') and point.speed is not None:
-                        if point.speed <= max_speed:
-                            points_to_keep.append(point)
+                        if point.speed > max_speed:
+                            consecutive_high_speed += 1
+                            
+                            # Check if we've hit 5 consecutive high-speed points
+                            if consecutive_high_speed >= 5:
+                                # Remove the last 4 points we just added (the previous consecutive high-speed points)
+                                points_removed_from_keep = min(4, len(points_to_keep))
+                                if points_removed_from_keep > 0:
+                                    points_to_keep = points_to_keep[:-points_removed_from_keep]
+                                    removed_count += points_removed_from_keep
+                                
+                                # Mark to trim this point and all remaining
+                                trim_all_remaining = True
+                                removed_count += 1
+                                logger.info(f"Found 5 consecutive high-speed points at index {i}, trimming remainder of route")
+                            else:
+                                removed_count += 1
                         else:
-                            removed_count += 1
+                            # Speed is within threshold, reset consecutive counter
+                            consecutive_high_speed = 0
+                            points_to_keep.append(point)
                     else:
+                        # No speed data, keep the point and reset counter
+                        consecutive_high_speed = 0
                         points_to_keep.append(point)
+                
                 segment.points = points_to_keep
         
         logger.info(f"Trimmed {removed_count} points with excessive speed")
@@ -232,6 +365,9 @@ class GPXWorkbenchApp:
                     dest_path = Path(self.temp_dir) / gpx_file.name
                     shutil.copy2(gpx_file, dest_path)
                     copied_count += 1
+                    
+                    # Automatically add speed tags if not present
+                    self.processor.parse_gpx(str(dest_path), auto_add_speed=True)
                 except Exception as e:
                     logger.error(f"Error copying {gpx_file.name}: {e}")
             
@@ -409,7 +545,7 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         
         self.cutoff_date_button = ft.ElevatedButton(
             f"📅 {default_date.strftime('%Y-%m-%d')}",
-            on_click=lambda _: self.cutoff_date_picker.pick_date(),
+            on_click=self.open_cutoff_date_picker,
             tooltip="Select cutoff date",
             style=ft.ButtonStyle(
                 bgcolor=ft.Colors.GREY_300
@@ -500,14 +636,10 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             tooltip="Automatically open the map in your default browser after creation"
         )
         
-        add_speed_button = ft.ElevatedButton(
-            "⚡ Add Speed Tags",
-            icon=ft.Icons.SPEED,
-            on_click=self.add_speed_tags,
-            style=ft.ButtonStyle(
-                color=ft.Colors.WHITE,
-                bgcolor=ft.Colors.ORANGE_700
-            )
+        self.separate_maps_checkbox = ft.Checkbox(
+            label="One file per route",
+            value=False,
+            tooltip="Create individual HTML files for each route instead of one combined file"
         )
         
         self.max_speed_field = ft.TextField(
@@ -527,17 +659,11 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             )
         )
         
-        self.hikes_url_field = ft.TextField(
-            label="Hikes API URL",
-            value=self.persistent_data.data.get("hikes_api_url", ""),
-            expand=True,
-            hint_text="https://api.example.com/hikes"
-        )
-        
         post_hikes_button = ft.ElevatedButton(
-            "📤 Post to Hikes",
+            "📤 Post to Hikes Blog",
             icon=ft.Icons.UPLOAD,
             on_click=self.post_to_hikes,
+            tooltip="Post selected routes to ~/GitHub/hikes repository",
             style=ft.ButtonStyle(
                 color=ft.Colors.WHITE,
                 bgcolor=ft.Colors.INDIGO_700
@@ -547,9 +673,18 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         return ft.Container(
             content=ft.Column([
                 ft.Text("Processing Controls", size=20, weight=ft.FontWeight.BOLD),
-                ft.Row([map_button, self.auto_open_map_checkbox, add_speed_button], spacing=10),
-                ft.Row([self.max_speed_field, trim_button], spacing=10),
-                ft.Row([self.hikes_url_field, post_hikes_button], spacing=10),
+                ft.Container(
+                    content=ft.Row([self.auto_open_map_checkbox, self.separate_maps_checkbox, map_button], spacing=10),
+                    height=50
+                ),
+                ft.Container(
+                    content=ft.Row([self.max_speed_field, trim_button], spacing=10),
+                    height=50
+                ),
+                ft.Container(
+                    content=ft.Row([post_hikes_button], spacing=10),
+                    height=50
+                ),
                 self.map_output
             ]),
             padding=15,
@@ -569,6 +704,9 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                     shutil.copy2(file.path, dest_path)
                     copied_count += 1
                     logger.info(f"Copied {file.name} to temp directory")
+                    
+                    # Automatically add speed tags if not present
+                    self.processor.parse_gpx(dest_path, auto_add_speed=True)
                 except Exception as ex:
                     logger.error(f"Error copying {file.name}: {ex}")
             
@@ -587,6 +725,11 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         except Exception as ex:
             logger.error(f"Error clearing temp directory: {ex}")
             self.update_status(f"Error: {ex}")
+    
+    def open_cutoff_date_picker(self, e):
+        """Open the cutoff date picker dialog"""
+        self.cutoff_date_picker.open = True
+        self.page.update()
     
     def on_cutoff_date_changed(self, e):
         """Handle cutoff date selection"""
@@ -673,8 +816,27 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             )
         else:
             for filename in gpx_files:
+                # Parse GPX to check for speed and distance tags
+                file_path = os.path.join(self.temp_dir, filename)
+                label_text = filename
+                
+                try:
+                    gpx = self.processor.parse_gpx(file_path)
+                    if gpx:
+                        max_speed_ms, max_distance_m = self.processor.get_max_speed_and_distance(gpx)
+                        
+                        if max_speed_ms is not None and max_distance_m is not None:
+                            # Convert m/s to mph (1 m/s = 2.23694 mph)
+                            max_speed_mph = max_speed_ms * 2.23694
+                            # Convert meters to feet (1 meter = 3.28084 feet)
+                            max_distance_feet = max_distance_m * 3.28084
+                            
+                            label_text = f"{filename}  [Max: {max_speed_mph:.1f} mph, {max_distance_feet:.1f} ft]"
+                except Exception as ex:
+                    logger.warning(f"Could not read speed/distance from {filename}: {ex}")
+                
                 checkbox = ft.Checkbox(
-                    label=filename,
+                    label=label_text,
                     value=filename in self.selected_files,
                     on_change=lambda e, f=filename: self.on_file_checkbox_changed(f, e.control.value)
                 )
@@ -729,91 +891,117 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         try:
             import folium
             
-            # Create a map centered on the first route
-            first_file = os.path.join(self.temp_dir, self.selected_files[0])
-            gpx = self.processor.parse_gpx(first_file)
-            
-            if gpx:
-                bounds = self.processor.get_gpx_bounds(gpx)
-                if bounds:
-                    center_lat = (bounds['min_lat'] + bounds['max_lat']) / 2
-                    center_lon = (bounds['min_lon'] + bounds['max_lon']) / 2
+            if self.separate_maps_checkbox.value:
+                # Create individual maps for each route
+                created_files = []
+                
+                for filename in self.selected_files:
+                    file_path = os.path.join(self.temp_dir, filename)
+                    gpx_data = self.processor.parse_gpx(file_path)
                     
-                    m = folium.Map(location=[center_lat, center_lon], zoom_start=13)
-                    
-                    # Add all selected routes to the map
-                    colors = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'lightred', 'beige', 'darkblue', 'darkgreen']
-                    
-                    for idx, filename in enumerate(self.selected_files):
-                        file_path = os.path.join(self.temp_dir, filename)
-                        gpx_data = self.processor.parse_gpx(file_path)
-                        
-                        if gpx_data:
-                            color = colors[idx % len(colors)]
+                    if gpx_data:
+                        bounds = self.processor.get_gpx_bounds(gpx_data)
+                        if bounds:
+                            center_lat = (bounds['min_lat'] + bounds['max_lat']) / 2
+                            center_lon = (bounds['min_lon'] + bounds['max_lon']) / 2
                             
+                            m = folium.Map(location=[center_lat, center_lon], zoom_start=13)
+                            
+                            # Add this route to the map
                             for track in gpx_data.tracks:
                                 for segment in track.segments:
                                     points = [(point.latitude, point.longitude) for point in segment.points]
                                     folium.PolyLine(
                                         points, 
-                                        color=color, 
+                                        color='blue', 
                                         weight=3, 
                                         opacity=0.7, 
                                         popup=filename,
-                                        tooltip=filename  # Add hover text showing filename
+                                        tooltip=filename
                                     ).add_to(m)
-                    
-                    # Save map
-                    map_file = os.path.join(self.temp_dir, "routes_map.html")
-                    m.save(map_file)
-                    
-                    self.update_status(f"Map created: {map_file}")
-                    self.map_output.value = f"✅ Map saved to: {map_file}\nOpen this file in a web browser to view the routes."
-                    logger.info(f"Map created with {len(self.selected_files)} routes")
-                    
-                    # Auto-open in browser if checkbox is checked
-                    if self.auto_open_map_checkbox.value:
-                        try:
+                            
+                            # Save map with route name
+                            html_filename = filename.replace('.gpx', '.html')
+                            map_file = os.path.join(self.temp_dir, html_filename)
+                            m.save(map_file)
+                            created_files.append(map_file)
+                            logger.info(f"Created individual map: {html_filename}")
+                
+                self.update_status(f"Created {len(created_files)} individual map file(s)")
+                self.map_output.value = f"✅ Created {len(created_files)} individual map files\n" + "\n".join([os.path.basename(f) for f in created_files])
+                
+                # Auto-open in browser if checkbox is checked
+                if self.auto_open_map_checkbox.value and created_files:
+                    try:
+                        for map_file in created_files:
                             webbrowser.open(f"file://{os.path.abspath(map_file)}")
-                            logger.info("Opened map in browser")
-                            self.map_output.value = f"✅ Map saved and opened in browser: {map_file}"
-                        except Exception as browser_error:
-                            logger.warning(f"Could not auto-open browser: {browser_error}")
-                    
-                else:
-                    self.update_status("Could not determine route bounds")
+                        logger.info(f"Opened {len(created_files)} maps in browser tabs")
+                        self.map_output.value = f"✅ Created and opened {len(created_files)} individual maps in browser"
+                    except Exception as browser_error:
+                        logger.warning(f"Could not auto-open browser: {browser_error}")
+                
             else:
-                self.update_status("Error parsing first GPX file")
+                # Create a single combined map
+                first_file = os.path.join(self.temp_dir, self.selected_files[0])
+                gpx = self.processor.parse_gpx(first_file)
+                
+                if gpx:
+                    bounds = self.processor.get_gpx_bounds(gpx)
+                    if bounds:
+                        center_lat = (bounds['min_lat'] + bounds['max_lat']) / 2
+                        center_lon = (bounds['min_lon'] + bounds['max_lon']) / 2
+                        
+                        m = folium.Map(location=[center_lat, center_lon], zoom_start=13)
+                        
+                        # Add all selected routes to the map
+                        colors = ['blue', 'red', 'green', 'purple', 'orange', 'darkred', 'lightred', 'beige', 'darkblue', 'darkgreen']
+                        
+                        for idx, filename in enumerate(self.selected_files):
+                            file_path = os.path.join(self.temp_dir, filename)
+                            gpx_data = self.processor.parse_gpx(file_path)
+                            
+                            if gpx_data:
+                                color = colors[idx % len(colors)]
+                                
+                                for track in gpx_data.tracks:
+                                    for segment in track.segments:
+                                        points = [(point.latitude, point.longitude) for point in segment.points]
+                                        folium.PolyLine(
+                                            points, 
+                                            color=color, 
+                                            weight=3, 
+                                            opacity=0.7, 
+                                            popup=filename,
+                                            tooltip=filename
+                                        ).add_to(m)
+                        
+                        # Save combined map
+                        map_file = os.path.join(self.temp_dir, "routes_map.html")
+                        m.save(map_file)
+                        
+                        self.update_status(f"Map created: {map_file}")
+                        self.map_output.value = f"✅ Map saved to: {map_file}\nOpen this file in a web browser to view the routes."
+                        logger.info(f"Map created with {len(self.selected_files)} routes")
+                        
+                        # Auto-open in browser if checkbox is checked
+                        if self.auto_open_map_checkbox.value:
+                            try:
+                                webbrowser.open(f"file://{os.path.abspath(map_file)}")
+                                logger.info("Opened map in browser")
+                                self.map_output.value = f"✅ Map saved and opened in browser: {map_file}"
+                            except Exception as browser_error:
+                                logger.warning(f"Could not auto-open browser: {browser_error}")
+                    
+                    else:
+                        self.update_status("Could not determine route bounds")
+                else:
+                    self.update_status("Error parsing first GPX file")
         
         except Exception as ex:
             logger.error(f"Error visualizing routes: {ex}")
             self.update_status(f"Error: {ex}")
         
         self.page.update()
-    
-    def add_speed_tags(self, e):
-        """Add speed tags to selected routes"""
-        if not self.selected_files:
-            self.update_status("No files selected")
-            return
-        
-        processed_count = 0
-        
-        for filename in self.selected_files:
-            file_path = os.path.join(self.temp_dir, filename)
-            gpx = self.processor.parse_gpx(file_path)
-            
-            if gpx:
-                gpx = self.processor.calculate_speed(gpx)
-                
-                # Save with _speed suffix
-                new_filename = filename.replace('.gpx', '_speed.gpx')
-                new_path = os.path.join(self.temp_dir, new_filename)
-                self.processor.save_gpx(gpx, new_path)
-                processed_count += 1
-        
-        self.update_status(f"Added speed tags to {processed_count} file(s)")
-        self.refresh_file_list(None)
     
     def trim_by_speed(self, e):
         """Trim selected routes by speed threshold"""
@@ -836,35 +1024,80 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             gpx = self.processor.parse_gpx(file_path)
             
             if gpx:
-                # First add speed if not present
-                gpx = self.processor.calculate_speed(gpx)
-                # Then trim (using m/s internally)
+                # Ensure speed tags are present (should already exist from auto-processing)
+                if not self.processor.has_speed_and_distance_tags(gpx):
+                    gpx = self.processor.calculate_speed(gpx)
+                
+                # Trim by speed threshold (using m/s internally)
                 gpx = self.processor.trim_by_speed(gpx, max_speed_ms)
                 
-                # Save with _trimmed suffix
-                new_filename = filename.replace('.gpx', '_trimmed.gpx')
-                new_path = os.path.join(self.temp_dir, new_filename)
-                self.processor.save_gpx(gpx, new_path)
+                # Replace the original file
+                self.processor.save_gpx(gpx, file_path)
                 processed_count += 1
         
         self.update_status(f"Trimmed {processed_count} file(s) by speed (max: {max_speed_mph} mph)")
         self.refresh_file_list(None)
     
+    def get_track_center(self, gpx):
+        """Calculate map center (lat, lon) from a gpxpy track object"""
+        lats = []
+        lons = []
+        for track in gpx.tracks:
+            for segment in track.segments:
+                for point in segment.points:
+                    lats.append(point.latitude)
+                    lons.append(point.longitude)
+        if lats and lons:
+            center_lat = sum(lats) / len(lats)
+            center_lon = sum(lons) / len(lons)
+            return (center_lat, center_lon)
+        return (0, 0)
+    
+    def get_datetime(self, gpx):
+        """Fetch the first <time> tag from a GPX and return a datetime object"""
+        for track in gpx.tracks:
+            for segment in track.segments:
+                for point in segment.points:
+                    if point.time:
+                        return point.time
+        return None
+    
+    def identify_place(self, lat, lon):
+        """Use reverse geocoding to identify the location"""
+        try:
+            from geopy.geocoders import Nominatim
+            geolocator = Nominatim(user_agent="gpx-routes-workbench")
+            coord = f"{lat}, {lon}"
+            location = geolocator.reverse(coord, timeout=10)
+            if location:
+                address = location.raw['address']
+                town = address.get('town', '')
+                city = address.get('city', '')
+                county = address.get('county', '')
+                
+                if town:
+                    return f"in {town}"
+                elif city:
+                    return f"in {city}"
+                elif county:
+                    return f"in {county}"
+            return "Unknown Location"
+        except Exception as e:
+            logger.warning(f"Could not identify location: {e}")
+            return "Unknown Location"
+    
     def post_to_hikes(self, e):
-        """Post selected routes to Hikes API"""
+        """Post selected routes to Hikes blog repository"""
         if not self.selected_files:
             self.update_status("No files selected")
             return
         
-        api_url = self.hikes_url_field.value.strip()
+        # Get hikes repository path from environment or use default
+        hikes_path = os.path.expanduser('~/GitHub/hikes')
         
-        if not api_url:
-            self.update_status("Please enter a Hikes API URL")
+        if not os.path.exists(hikes_path):
+            self.update_status(f"Error: Hikes repository not found at {hikes_path}")
             return
-        
-        # Save API URL to persistent data
-        self.persistent_data.data["hikes_api_url"] = api_url
-        self.persistent_data.save()
         
         posted_count = 0
         
@@ -872,26 +1105,93 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             file_path = os.path.join(self.temp_dir, filename)
             
             try:
-                with open(file_path, 'r') as f:
-                    gpx_data = f.read()
+                # Parse GPX file
+                gpx = self.processor.parse_gpx(file_path)
+                if not gpx:
+                    logger.error(f"Could not parse {filename}")
+                    continue
                 
-                # Post to API (adjust payload structure as needed for your API)
-                response = requests.post(
-                    api_url,
-                    files={'gpx': (filename, gpx_data, 'application/gpx+xml')},
-                    timeout=30
-                )
+                # Extract GPX metadata
+                center = self.get_track_center(gpx)
+                dt = self.get_datetime(gpx)
                 
-                if response.status_code == 200 or response.status_code == 201:
-                    posted_count += 1
-                    logger.info(f"Posted {filename} to Hikes API")
-                else:
-                    logger.error(f"Failed to post {filename}: {response.status_code}")
-            
+                if not dt:
+                    logger.error(f"No datetime found in {filename}")
+                    continue
+                
+                place = self.identify_place(center[0], center[1])
+                mode = "Walking"  # Default mode
+                
+                # Format date/time for paths and frontmatter
+                pub_date = dt.strftime('%Y-%m-%d')
+                ym_path = dt.strftime('%Y/%m')
+                title = f"{dt.strftime('%a %b %d')} at {dt.strftime('%-l%p').lower()} - {mode} {place}"
+                weight = f"-{dt.strftime('%Y%m%d%H%M')}"
+                
+                # Create markdown file
+                md_filename = filename.replace('.gpx', '.md')
+                md_dir = os.path.join(hikes_path, 'content/hikes', ym_path)
+                os.makedirs(md_dir, exist_ok=True)
+                
+                md_path = os.path.join(md_dir, md_filename)
+                
+                with open(md_path, 'w') as md_file:
+                    # Write frontmatter
+                    md_file.write("---\n")
+                    md_file.write(f"title: {title}\n")
+                    md_file.write(f"weight: {weight}\n")
+                    md_file.write(f"publishDate: {pub_date}\n")
+                    md_file.write(f"location: {place}\n")
+                    md_file.write("highlight: false\n")
+                    md_file.write(f"bike: {'True' if mode == 'Cycling' else 'False'}\n")
+                    md_file.write(f"trackType: {mode.lower()}\n")
+                    md_file.write("trashBags: false\n")
+                    md_file.write("trashRecyclables: false\n")
+                    md_file.write("trashWeight: false\n")
+                    md_file.write("weather: Weather data not available\n")
+                    md_file.write("---\n")
+                    
+                    # Write leaflet map shortcodes
+                    md_file.write('{{< leaflet-map mapHeight="500px" mapWidth="100%" >}}\n')
+                    md_file.write(f'  {{{{< leaflet-track trackPath="{ym_path}/{filename}" lineColor=#c838d1 lineWeight="5" graphDetached=True >}}}}\n')
+                    md_file.write('{{< /leaflet-map >}}\n')
+                
+                # Copy GPX file to static directory
+                gpx_dir = os.path.join(hikes_path, 'static/gpx', ym_path)
+                os.makedirs(gpx_dir, exist_ok=True)
+                shutil.copy(file_path, os.path.join(gpx_dir, filename))
+                
+                posted_count += 1
+                logger.info(f"Posted {filename} to Hikes")
+                
             except Exception as ex:
                 logger.error(f"Error posting {filename}: {ex}")
         
-        self.update_status(f"Posted {posted_count}/{len(self.selected_files)} file(s) to Hikes")
+        # Git commit and push
+        if posted_count > 0:
+            try:
+                import subprocess
+                cwd = os.getcwd()
+                os.chdir(hikes_path)
+                
+                subprocess.run(['git', 'pull'], check=True)
+                subprocess.run(['git', 'add', '.'], check=True)
+                subprocess.run(['git', 'commit', '-m', f'Posted {posted_count} routes from GPX Routes Workbench'], check=True)
+                subprocess.run(['git', 'push'], check=True)
+                
+                os.chdir(cwd)
+                self.update_status(f"Successfully posted {posted_count} route(s) to Hikes and pushed to GitHub")
+                
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Git error: {e}")
+                os.chdir(cwd)
+                self.update_status(f"Posted {posted_count} file(s) but git push failed")
+            except Exception as e:
+                logger.error(f"Error during git operations: {e}")
+                os.chdir(cwd)
+                self.update_status(f"Posted {posted_count} file(s) but git operations failed")
+        else:
+            self.update_status("No files were posted")
     
     def update_status(self, message: str):
         """Update status text"""
