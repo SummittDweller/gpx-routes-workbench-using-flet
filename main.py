@@ -317,6 +317,112 @@ class GPXWorkbenchApp:
         
         self.build_ui()
     
+    def parse_export_xml_for_activities(self, extract_dir):
+        """Parse Export.xml to extract workout activity types and associate them with GPX files"""
+        import xml.etree.ElementTree as ET
+        from datetime import datetime
+        
+        export_xml_path = extract_dir / "apple_health_export" / "Export.xml"
+        
+        if not export_xml_path.exists():
+            logger.warning("Export.xml not found in health export")
+            return {}
+        
+        try:
+            logger.info("Parsing Export.xml for workout activity types...")
+            tree = ET.parse(export_xml_path)
+            root = tree.getroot()
+            
+            # Dictionary to store activity types by workout date/time
+            workout_activities = {}
+            
+            # Find all Workout elements
+            for workout in root.findall('.//Workout'):
+                workout_type = workout.get('workoutActivityType', '')
+                start_date = workout.get('startDate', '')
+                
+                if workout_type and start_date:
+                    # Parse the start date to match with GPX file naming
+                    try:
+                        # Example startDate: "2025-10-10 14:40:23 -0500"
+                        dt = datetime.strptime(start_date.split(' ')[0] + ' ' + start_date.split(' ')[1], '%Y-%m-%d %H:%M:%S')
+                        
+                        # Convert activity type to friendly name
+                        activity_name = self.convert_activity_type(workout_type)
+                        
+                        # Store by date/time key for matching with GPX files
+                        date_key = dt.strftime('%Y-%m-%d_%H.%M')
+                        workout_activities[date_key] = activity_name
+                        
+                        logger.debug(f"Found workout: {date_key} -> {activity_name} ({workout_type})")
+                        
+                    except Exception as e:
+                        logger.warning(f"Could not parse workout date {start_date}: {e}")
+            
+            logger.info(f"Found {len(workout_activities)} workout activities in Export.xml")
+            return workout_activities
+            
+        except Exception as e:
+            logger.error(f"Error parsing Export.xml: {e}")
+            return {}
+    
+    def convert_activity_type(self, workout_type):
+        """Convert Apple Health workout activity type to friendly name"""
+        activity_mapping = {
+            'HKWorkoutActivityTypeWalking': 'Walking',
+            'HKWorkoutActivityTypeRunning': 'Running', 
+            'HKWorkoutActivityTypeCycling': 'Biking',
+            'HKWorkoutActivityTypeHiking': 'Hiking',
+            'HKWorkoutActivityTypeSwimming': 'Swimming',
+            'HKWorkoutActivityTypeYoga': 'Yoga',
+            'HKWorkoutActivityTypeOther': 'Other',
+            # Add more mappings as needed
+        }
+        
+        return activity_mapping.get(workout_type, 'Walking')  # Default to Walking
+    
+    def match_gpx_to_activity(self, gpx_filename, workout_activities):
+        """Match a GPX filename to its activity type using the workout activities dict"""
+        import re
+        
+        # Extract date/time from GPX filename: route_2025-10-10_2.40pm.gpx
+        match = re.match(r'route_(\d{4}-\d{2}-\d{2})_(\d{1,2})\.(\d{2})(am|pm)\.gpx', gpx_filename)
+        
+        if match:
+            date_part, hour, minute, period = match.groups()
+            hour = int(hour)
+            
+            # Convert 12-hour to 24-hour format
+            if period == 'pm' and hour != 12:
+                hour += 12
+            elif period == 'am' and hour == 12:
+                hour = 0
+            
+            # Create key to match workout_activities
+            date_key = f"{date_part}_{hour:02d}.{minute}"
+            
+            # Try exact match first, then try nearby times (within 5 minutes)
+            if date_key in workout_activities:
+                return workout_activities[date_key]
+            
+            # Try nearby times (GPX file times might be slightly different from workout start times)
+            base_time = datetime.strptime(f"{date_part} {hour:02d}:{minute}", '%Y-%m-%d %H:%M')
+            
+            for key, activity in workout_activities.items():
+                try:
+                    workout_time = datetime.strptime(key, '%Y-%m-%d_%H.%M')
+                    time_diff = abs((base_time - workout_time).total_seconds())
+                    
+                    # If within 5 minutes, consider it a match
+                    if time_diff <= 300:  # 5 minutes
+                        logger.info(f"Matched {gpx_filename} to {activity} (time diff: {time_diff:.0f}s)")
+                        return activity
+                except:
+                    continue
+        
+        logger.warning(f"Could not match {gpx_filename} to any workout activity")
+        return 'Walking'  # Default fallback
+    
     def auto_extract_health_export(self):
         """Automatically check for and extract export.zip from Downloads folder"""
         try:
@@ -347,6 +453,9 @@ class GPXWorkbenchApp:
             with zipfile.ZipFile(downloads_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
             
+            # Parse Export.xml to get workout activity types
+            workout_activities = self.parse_export_xml_for_activities(extract_dir)
+            
             # Look for workout-routes folder
             workout_routes_path = extract_dir / "apple_health_export" / "workout-routes"
             
@@ -356,15 +465,23 @@ class GPXWorkbenchApp:
                 shutil.rmtree(extract_dir)
                 return
             
-            # Copy all GPX files from workout-routes to temp directory
+            # Copy all GPX files from workout-routes to temp directory with activity-based names
             gpx_files = list(workout_routes_path.glob("*.gpx"))
             copied_count = 0
             
             for gpx_file in gpx_files:
                 try:
-                    dest_path = Path(self.temp_dir) / gpx_file.name
+                    # Determine activity type for this GPX file
+                    activity_type = self.match_gpx_to_activity(gpx_file.name, workout_activities)
+                    
+                    # Create new filename with activity type instead of "route"
+                    new_filename = gpx_file.name.replace('route_', f'{activity_type.lower()}_')
+                    dest_path = Path(self.temp_dir) / new_filename
+                    
                     shutil.copy2(gpx_file, dest_path)
                     copied_count += 1
+                    
+                    logger.info(f"Copied {gpx_file.name} -> {new_filename} ({activity_type})")
                     
                     # Automatically add speed tags if not present
                     self.processor.parse_gpx(str(dest_path), auto_add_speed=True)
@@ -773,11 +890,12 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             self.update_status(f"Error: {ex}")
     
     def _extract_date_from_filename(self, filename: str) -> datetime:
-        """Extract datetime from filename for sorting (e.g., route_2025-02-04_9.04am.gpx)"""
+        """Extract datetime from filename for sorting (e.g., walking_2025-02-04_9.04am.gpx or route_2025-02-04_9.04am.gpx)"""
         import re
         try:
-            # Parse format: route_YYYY-MM-DD_H.MMam/pm.gpx
-            match = re.match(r'route_(\d{4})-(\d{2})-(\d{2})_(\d{1,2})\.(\d{2})(am|pm)\.gpx', filename)
+            # Parse format: activity_YYYY-MM-DD_H.MMam/pm.gpx (new format) or route_YYYY-MM-DD_H.MMam/pm.gpx (old format)
+            # Match any word followed by underscore, then date/time pattern
+            match = re.match(r'\w+_(\d{4})-(\d{2})-(\d{2})_(\d{1,2})\.(\d{2})(am|pm)\.gpx', filename)
             if match:
                 year, month, day, hour, minute, period = match.groups()
                 hour = int(hour)
@@ -1120,7 +1238,12 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                     continue
                 
                 place = self.identify_place(center[0], center[1])
+                
+                # Extract activity type from filename (e.g., walking_2025-10-10_2.40pm.gpx)
                 mode = "Walking"  # Default mode
+                if '_' in filename:
+                    activity_prefix = filename.split('_')[0]
+                    mode = activity_prefix.capitalize()  # walking -> Walking, biking -> Biking, etc.
                 
                 # Format date/time for paths and frontmatter
                 pub_date = dt.strftime('%Y-%m-%d')
@@ -1143,7 +1266,7 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                     md_file.write(f"publishDate: {pub_date}\n")
                     md_file.write(f"location: {place}\n")
                     md_file.write("highlight: false\n")
-                    md_file.write(f"bike: {'True' if mode == 'Cycling' else 'False'}\n")
+                    md_file.write(f"bike: {'True' if mode in ['Biking', 'Cycling'] else 'False'}\n")
                     md_file.write(f"trackType: {mode.lower()}\n")
                     md_file.write("trashBags: false\n")
                     md_file.write("trashRecyclables: false\n")
