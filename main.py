@@ -329,15 +329,18 @@ class GPXWorkbenchApp:
             on_dismiss=lambda e: None,
         )
         
-        # Check if export.zip exists before building UI
-        downloads_path = Path.home() / "Downloads" / "export.zip"
+        # Find the latest export.zip file (including numbered versions)
+        downloads_dir = Path.home() / "Downloads"
+        export_file = self.find_latest_export_file(downloads_dir)
+        
         existing_gpx_count = 0
         if os.path.exists(self.temp_dir):
             existing_gpx_count = len([f for f in os.listdir(self.temp_dir) if f.endswith('.gpx')])
         
-        self.has_export_zip = downloads_path.exists() and existing_gpx_count == 0
+        self.has_export_zip = export_file is not None and existing_gpx_count == 0
+        self.export_zip_path = export_file
         self.existing_files_count = existing_gpx_count
-        logger.info(f"Export.zip check: exists={downloads_path.exists()}, has_export_zip={self.has_export_zip}, existing_files={existing_gpx_count}")
+        logger.info(f"Export.zip check: found={export_file}, has_export_zip={self.has_export_zip}, existing_files={existing_gpx_count}")
         
         # Build UI first
         self.build_ui()
@@ -348,6 +351,37 @@ class GPXWorkbenchApp:
         # If export.zip found, extract it immediately (UI is now ready)
         if self.has_export_zip:
             self.auto_extract_health_export()
+    
+    def find_latest_export_file(self, downloads_dir: Path) -> Optional[Path]:
+        """Find the latest export.zip file, checking for numbered versions like 'export 2.zip', 'export 3.zip', etc."""
+        import re
+        
+        if not downloads_dir.exists():
+            logger.info(f"Downloads directory does not exist: {downloads_dir}")
+            return None
+        
+        # Pattern to match export.zip, export 2.zip, export 3.zip, etc.
+        pattern = re.compile(r'^export(?: (\d+))?\.zip$', re.IGNORECASE)
+        
+        matches = []
+        for file in downloads_dir.iterdir():
+            if file.is_file():
+                match = pattern.match(file.name)
+                if match:
+                    # Extract number (0 for plain export.zip, N for export N.zip)
+                    number = int(match.group(1)) if match.group(1) else 0
+                    matches.append((number, file))
+                    logger.info(f"Found export file candidate: {file.name} (number={number})")
+        
+        if not matches:
+            logger.info("No export files found in Downloads")
+            return None
+        
+        # Return the file with the highest number
+        matches.sort(reverse=True)
+        latest_file = matches[0][1]
+        logger.info(f"Selected export file: {latest_file.name} (from {len(matches)} candidates)")
+        return latest_file
     
     def parse_export_xml_for_activities(self, extract_dir):
         """Parse Export.xml to extract workout activity types and associate them with GPX files"""
@@ -465,21 +499,21 @@ class GPXWorkbenchApp:
                     logger.info(f"Skipping auto-extraction: {len(existing_gpx)} GPX files already exist in temp directory")
                     return
             
-            # Get the user's home directory and construct Downloads path
-            downloads_path = Path.home() / "Downloads" / "export.zip"
-            
-            if not downloads_path.exists():
+            # Use the export file path found during initialization
+            if not self.export_zip_path or not self.export_zip_path.exists():
                 logger.info("No export.zip found in Downloads folder")
                 return
             
-            logger.info(f"Found export.zip at {downloads_path}")
+            downloads_path = self.export_zip_path
+            logger.info(f"Found export file at {downloads_path}")
             
             # Show progress indicator
+            filename = downloads_path.name
             self.progress_container.visible = True
             self.progress_ring.visible = True
             self.progress_text.visible = True
-            self.progress_text.value = "📦 Found export.zip in Downloads - extracting..."
-            self.update_status("📦 Found export.zip in Downloads - extracting...")
+            self.progress_text.value = f"📦 Found {filename} in Downloads - extracting..."
+            self.update_status(f"📦 Found {filename} in Downloads - extracting...")
             self.page.update()
             time.sleep(0.1)  # Give UI time to render
             
@@ -491,8 +525,8 @@ class GPXWorkbenchApp:
                 shutil.rmtree(extract_dir)
             
             logger.info("Extracting export.zip...")
-            self.progress_text.value = "📂 Extracting export.zip..."
-            self.update_status("📂 Extracting export.zip...")
+            self.progress_text.value = f"📂 Extracting {filename}..."
+            self.update_status(f"📂 Extracting {filename}...")
             self.page.update()
             time.sleep(0.1)
             with zipfile.ZipFile(downloads_path, 'r') as zip_ref:
@@ -571,7 +605,7 @@ class GPXWorkbenchApp:
             self.progress_text.visible = False
             
             # Update final status and refresh file list
-            self.update_status(f"✅ Auto-extracted {copied_count} routes from Downloads/export.zip")
+            self.update_status(f"✅ Auto-extracted {copied_count} routes from Downloads/{filename}")
             self.page.update()
             self.refresh_file_list(None)
             
@@ -613,9 +647,11 @@ class GPXWorkbenchApp:
         )
         
         # Progress indicator container (shown during export extraction)
+        export_filename = self.export_zip_path.name if self.export_zip_path else "export.zip"
+        self.progress_title = ft.Text(f"Processing {export_filename}", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_700)
         self.progress_container = ft.Container(
             content=ft.Column([
-                ft.Text("Processing export.zip", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_700),
+                self.progress_title,
                 ft.Row([self.progress_ring, self.progress_text], alignment=ft.MainAxisAlignment.CENTER),
                 self.progress_bar
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
