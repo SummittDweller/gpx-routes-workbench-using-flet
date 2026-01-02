@@ -1,4 +1,4 @@
-flet>=0.23.0
+flet==0.24.1
 gpxpy>=1.6.2
 folium>=0.16.0
 requests>=2.31.0

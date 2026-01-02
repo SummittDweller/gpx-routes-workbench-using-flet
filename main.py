@@ -312,6 +312,17 @@ class GPXWorkbenchApp:
         self.status_text = ft.Text("Ready", size=14)
         self.map_output = ft.Text("", size=12)
         
+        # Default to 30 days ago for cutoff date
+        default_date = datetime.now() - timedelta(days=30)
+        self.selected_cutoff_date = default_date
+        
+        # Initialize pickers (will be added to overlay in build_ui)
+        self.pick_files_dialog = ft.FilePicker(on_result=self.on_files_selected)
+        self.cutoff_date_picker = ft.DatePicker(
+            on_change=self.on_cutoff_date_changed,
+            on_dismiss=lambda e: None,
+        )
+        
         # Auto-extract export.zip from Downloads if found
         self.auto_extract_health_export()
         
@@ -509,7 +520,7 @@ class GPXWorkbenchApp:
                 "GPX Routes Workbench",
                 size=32,
                 weight=ft.FontWeight.BOLD,
-                color=ft.Colors.BLUE_700
+                color=ft.colors.BLUE_700
             ),
             padding=10
         )
@@ -530,7 +541,7 @@ class GPXWorkbenchApp:
         status_bar = ft.Container(
             content=self.status_text,
             padding=10,
-            bgcolor=ft.Colors.GREY_200,
+            bgcolor=ft.colors.GREY_200,
             border_radius=5
         )
         
@@ -548,6 +559,11 @@ class GPXWorkbenchApp:
             ft.Divider(),
             status_bar
         )
+        
+        # Add pickers to overlay after UI is built
+        self.page.overlay.append(self.pick_files_dialog)
+        self.page.overlay.append(self.cutoff_date_picker)
+        self.page.update()
     
     def create_instructions_section(self) -> ft.Column:
         """Create instructions for exporting iPhone health data"""
@@ -586,13 +602,13 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         
         # Create toggle button
         self.instructions_toggle_icon = ft.Icon(
-            ft.Icons.EXPAND_MORE if not has_gpx_files else ft.Icons.EXPAND_LESS,
-            color=ft.Colors.GREEN_700
+            ft.icons.EXPAND_MORE if not has_gpx_files else ft.icons.EXPAND_LESS,
+            color=ft.colors.GREEN_700
         )
         
         def toggle_instructions(e):
             self.instructions_content.visible = not self.instructions_content.visible
-            self.instructions_toggle_icon.name = ft.Icons.EXPAND_LESS if self.instructions_content.visible else ft.Icons.EXPAND_MORE
+            self.instructions_toggle_icon.name = ft.icons.EXPAND_LESS if self.instructions_content.visible else ft.icons.EXPAND_MORE
             self.page.update()
         
         # Create header with click to expand/collapse
@@ -600,8 +616,8 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             content=ft.Row([
                 self.instructions_toggle_icon,
                 ft.Text("📱 iPhone Health Data Export Instructions", 
-                       size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_700),
-                ft.Text("(click to expand/collapse)", size=12, color=ft.Colors.GREEN_600, italic=True),
+                       size=18, weight=ft.FontWeight.BOLD, color=ft.colors.GREEN_700),
+                ft.Text("(click to expand/collapse)", size=12, color=ft.colors.GREEN_600, italic=True),
             ], spacing=10),
             on_click=toggle_instructions,
             padding=10,
@@ -613,70 +629,56 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                     instructions_header,
                     self.instructions_content,
                 ]),
-                bgcolor=ft.Colors.GREEN_50,
+                bgcolor=ft.colors.GREEN_50,
                 border_radius=10,
-                border=ft.border.all(2, ft.Colors.GREEN_200)
+                border=ft.border.all(2, ft.colors.GREEN_200)
             )
         ])
     
     def create_file_picker_section(self) -> ft.Container:
         """Create file picker section"""
         
-        # File picker dialogs
-        self.pick_files_dialog = ft.FilePicker(on_result=self.on_files_selected)
-        self.page.overlay.append(self.pick_files_dialog)
-        
+        # Create buttons (FilePicker and DatePicker are initialized in __init__)
         pick_files_button = ft.ElevatedButton(
             "📁 Select GPX Files",
-            icon=ft.Icons.FILE_OPEN,
+            icon=ft.icons.FILE_OPEN,
             on_click=lambda _: self.pick_files_dialog.pick_files(
                 allowed_extensions=["gpx"],
                 allow_multiple=True
             ),
             style=ft.ButtonStyle(
-                color=ft.Colors.WHITE,
-                bgcolor=ft.Colors.BLUE_700
+                color=ft.colors.WHITE,
+                bgcolor=ft.colors.BLUE_700
             )
         )
         
         clear_temp_button = ft.ElevatedButton(
             "🗑️ Clear Temp Directory",
-            icon=ft.Icons.DELETE,
+            icon=ft.icons.DELETE,
             on_click=self.clear_temp_directory,
             style=ft.ButtonStyle(
-                color=ft.Colors.WHITE,
-                bgcolor=ft.Colors.RED_700
+                color=ft.colors.WHITE,
+                bgcolor=ft.colors.RED_700
             )
         )
         
-        # Date picker for removing old files
-        self.cutoff_date_picker = ft.DatePicker(
-            on_change=self.on_cutoff_date_changed,
-            on_dismiss=lambda e: None,
-        )
-        self.page.overlay.append(self.cutoff_date_picker)
-        
-        # Default to 30 days ago
-        default_date = datetime.now() - timedelta(days=30)
-        self.selected_cutoff_date = default_date
-        
         self.cutoff_date_button = ft.ElevatedButton(
-            f"📅 {default_date.strftime('%Y-%m-%d')}",
+            f"📅 {self.selected_cutoff_date.strftime('%Y-%m-%d')}",
             on_click=self.open_cutoff_date_picker,
             tooltip="Select cutoff date",
             style=ft.ButtonStyle(
-                bgcolor=ft.Colors.GREY_300
+                bgcolor=ft.colors.GREY_300
             )
         )
         
         remove_old_button = ft.ElevatedButton(
             "🧹 Remove Files Before Date",
-            icon=ft.Icons.DELETE_SWEEP,
+            icon=ft.icons.DELETE_SWEEP,
             on_click=self.remove_files_before_date,
             tooltip="Remove all GPX files older than the selected date",
             style=ft.ButtonStyle(
-                color=ft.Colors.WHITE,
-                bgcolor=ft.Colors.ORANGE_700
+                color=ft.colors.WHITE,
+                bgcolor=ft.colors.ORANGE_700
             )
         )
         
@@ -692,7 +694,7 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                 ft.Text(f"Temp directory: {self.temp_dir}", size=12, italic=True)
             ]),
             padding=15,
-            bgcolor=ft.Colors.BLUE_50,
+            bgcolor=ft.colors.BLUE_50,
             border_radius=10
         )
     
@@ -701,19 +703,19 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         
         select_all_button = ft.ElevatedButton(
             "Select All",
-            icon=ft.Icons.CHECK_BOX,
+            icon=ft.icons.CHECK_BOX,
             on_click=self.select_all_files
         )
         
         deselect_all_button = ft.ElevatedButton(
             "Deselect All",
-            icon=ft.Icons.CHECK_BOX_OUTLINE_BLANK,
+            icon=ft.icons.CHECK_BOX_OUTLINE_BLANK,
             on_click=self.deselect_all_files
         )
         
         refresh_button = ft.ElevatedButton(
             "🔄 Refresh List",
-            icon=ft.Icons.REFRESH,
+            icon=ft.icons.REFRESH,
             on_click=self.refresh_file_list
         )
         
@@ -724,13 +726,13 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                 ft.Container(
                     content=self.files_list_view,
                     height=200,
-                    border=ft.border.all(1, ft.Colors.GREY_400),
+                    border=ft.border.all(1, ft.colors.GREY_400),
                     border_radius=5,
                     padding=5
                 )
             ]),
             padding=15,
-            bgcolor=ft.Colors.GREY_50,
+            bgcolor=ft.colors.GREY_50,
             border_radius=10
         )
     
@@ -739,11 +741,11 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         
         map_button = ft.ElevatedButton(
             "🗺️ Visualize Routes",
-            icon=ft.Icons.MAP,
+            icon=ft.icons.MAP,
             on_click=self.visualize_routes,
             style=ft.ButtonStyle(
-                color=ft.Colors.WHITE,
-                bgcolor=ft.Colors.PURPLE_700
+                color=ft.colors.WHITE,
+                bgcolor=ft.colors.PURPLE_700
             )
         )
         
@@ -768,22 +770,22 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         
         trim_button = ft.ElevatedButton(
             "✂️ Trim by Speed",
-            icon=ft.Icons.CONTENT_CUT,
+            icon=ft.icons.CONTENT_CUT,
             on_click=self.trim_by_speed,
             style=ft.ButtonStyle(
-                color=ft.Colors.WHITE,
-                bgcolor=ft.Colors.TEAL_700
+                color=ft.colors.WHITE,
+                bgcolor=ft.colors.TEAL_700
             )
         )
         
         post_hikes_button = ft.ElevatedButton(
             "📤 Post to Hikes Blog",
-            icon=ft.Icons.UPLOAD,
+            icon=ft.icons.UPLOAD,
             on_click=self.post_to_hikes,
             tooltip="Post selected routes to ~/GitHub/hikes repository",
             style=ft.ButtonStyle(
-                color=ft.Colors.WHITE,
-                bgcolor=ft.Colors.INDIGO_700
+                color=ft.colors.WHITE,
+                bgcolor=ft.colors.INDIGO_700
             )
         )
         
@@ -805,7 +807,7 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                 self.map_output
             ]),
             padding=15,
-            bgcolor=ft.Colors.AMBER_50,
+            bgcolor=ft.colors.AMBER_50,
             border_radius=10
         )
     
@@ -930,7 +932,7 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         
         if not gpx_files:
             self.files_list_view.controls.append(
-                ft.Text("No GPX files found in temp directory", italic=True, color=ft.Colors.GREY_700)
+                ft.Text("No GPX files found in temp directory", italic=True, color=ft.colors.GREY_700)
             )
         else:
             for filename in gpx_files:
@@ -966,7 +968,7 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             should_show = len(gpx_files) == 0
             self.instructions_content.visible = should_show
             if hasattr(self, 'instructions_toggle_icon'):
-                self.instructions_toggle_icon.name = ft.Icons.EXPAND_LESS if should_show else ft.Icons.EXPAND_MORE
+                self.instructions_toggle_icon.name = ft.icons.EXPAND_LESS if should_show else ft.icons.EXPAND_MORE
         
         self.page.update()
         logger.info(f"File list refreshed: {len(gpx_files)} files found")
@@ -1325,9 +1327,16 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
 
 def main(page: ft.Page):
     """Main entry point for the Flet app"""
-    app = GPXWorkbenchApp(page)
-    app.refresh_file_list(None)
+    logger.info("Main function called, initializing app...")
+    try:
+        app = GPXWorkbenchApp(page)
+        app.refresh_file_list(None)
+        logger.info("App initialization complete")
+    except Exception as e:
+        logger.error(f"Error initializing app: {e}", exc_info=True)
+        raise
 
 
 if __name__ == "__main__":
-    ft.run(main)
+    logger.info("Starting Flet application...")
+    ft.app(target=main, view=ft.AppView.FLET_APP)
