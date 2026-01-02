@@ -40,9 +40,42 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Running the Application
+### Quick Start with run.sh (macOS/Linux)
+
+The easiest way to run the application is using the provided `run.sh` script:
 
 ```bash
+./run.sh
+```
+
+**What run.sh does:**
+- ✓ Automatically creates a Python virtual environment (`.venv`) if it doesn't exist
+- ✓ Activates the virtual environment
+- ✓ Installs all required dependencies from `requirements.txt`
+- ✓ Launches the GPX Routes Workbench application
+
+**First-time setup:**
+```bash
+# Make the script executable (only needed once)
+chmod +x run.sh
+
+# Run the application
+./run.sh
+```
+
+**Note**: The `run.sh` script handles everything for you. You don't need to manually create the virtual environment or install dependencies!
+
+### Manual Launch (Alternative)
+
+If you prefer to run the application manually:
+
+```bash
+# Activate virtual environment first
+source .venv/bin/activate  # On macOS/Linux
+# or
+.venv\Scripts\activate     # On Windows
+
+# Run the application
 python main.py
 ```
 

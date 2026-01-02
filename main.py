@@ -809,7 +809,7 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             border_radius=10
         )
     
-    def on_files_selected(self, e: ft.FilePickerResultEvent):
+    def on_files_selected(self, e):
         """Handle file selection from file picker"""
         if e.files:
             logger.info(f"Selected {len(e.files)} files")
@@ -1330,4 +1330,4 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.run(target=main)
