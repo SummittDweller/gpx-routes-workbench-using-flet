@@ -10,6 +10,7 @@ import os
 import shutil
 import zipfile
 import webbrowser
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -312,6 +313,11 @@ class GPXWorkbenchApp:
         self.status_text = ft.Text("Ready", size=14)
         self.map_output = ft.Text("", size=12)
         
+        # Progress indicators for export extraction
+        self.progress_ring = ft.ProgressRing(visible=False)
+        self.progress_bar = ft.ProgressBar(visible=False, width=400)
+        self.progress_text = ft.Text("", size=14, weight=ft.FontWeight.BOLD, visible=False)
+        
         # Default to 30 days ago for cutoff date
         default_date = datetime.now() - timedelta(days=30)
         self.selected_cutoff_date = default_date
@@ -323,10 +329,25 @@ class GPXWorkbenchApp:
             on_dismiss=lambda e: None,
         )
         
-        # Auto-extract export.zip from Downloads if found
-        self.auto_extract_health_export()
+        # Check if export.zip exists before building UI
+        downloads_path = Path.home() / "Downloads" / "export.zip"
+        existing_gpx_count = 0
+        if os.path.exists(self.temp_dir):
+            existing_gpx_count = len([f for f in os.listdir(self.temp_dir) if f.endswith('.gpx')])
         
+        self.has_export_zip = downloads_path.exists() and existing_gpx_count == 0
+        self.existing_files_count = existing_gpx_count
+        logger.info(f"Export.zip check: exists={downloads_path.exists()}, has_export_zip={self.has_export_zip}, existing_files={existing_gpx_count}")
+        
+        # Build UI first
         self.build_ui()
+        
+        # Force page update to render the UI including progress indicator
+        self.page.update()
+        
+        # If export.zip found, extract it immediately (UI is now ready)
+        if self.has_export_zip:
+            self.auto_extract_health_export()
     
     def parse_export_xml_for_activities(self, extract_dir):
         """Parse Export.xml to extract workout activity types and associate them with GPX files"""
@@ -453,6 +474,15 @@ class GPXWorkbenchApp:
             
             logger.info(f"Found export.zip at {downloads_path}")
             
+            # Show progress indicator
+            self.progress_container.visible = True
+            self.progress_ring.visible = True
+            self.progress_text.visible = True
+            self.progress_text.value = "📦 Found export.zip in Downloads - extracting..."
+            self.update_status("📦 Found export.zip in Downloads - extracting...")
+            self.page.update()
+            time.sleep(0.1)  # Give UI time to render
+            
             # Extract to a temporary location
             extract_dir = Path(self.temp_dir) / "health_export_temp"
             
@@ -461,10 +491,18 @@ class GPXWorkbenchApp:
                 shutil.rmtree(extract_dir)
             
             logger.info("Extracting export.zip...")
+            self.progress_text.value = "📂 Extracting export.zip..."
+            self.update_status("📂 Extracting export.zip...")
+            self.page.update()
+            time.sleep(0.1)
             with zipfile.ZipFile(downloads_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
             
             # Parse Export.xml to get workout activity types
+            self.progress_text.value = "📋 Parsing workout data..."
+            self.update_status("📋 Parsing workout data...")
+            self.page.update()
+            time.sleep(0.1)
             workout_activities = self.parse_export_xml_for_activities(extract_dir)
             
             # Look for workout-routes folder
@@ -479,9 +517,27 @@ class GPXWorkbenchApp:
             # Copy all GPX files from workout-routes to temp directory with activity-based names
             gpx_files = list(workout_routes_path.glob("*.gpx"))
             copied_count = 0
+            total_files = len(gpx_files)
             
-            for gpx_file in gpx_files:
+            # Show progress bar
+            self.progress_bar.visible = True
+            self.progress_bar.value = 0
+            self.progress_text.value = f"🚶 Processing {total_files} workout routes..."
+            self.update_status(f"🚶 Processing {total_files} workout routes...")
+            self.page.update()
+            time.sleep(0.1)
+            
+            for i, gpx_file in enumerate(gpx_files, 1):
                 try:
+                    # Update progress
+                    progress = i / total_files
+                    self.progress_bar.value = progress
+                    if i % 5 == 0 or i == total_files:
+                        self.progress_text.value = f"🚶 Processing workout routes... ({i}/{total_files})"
+                        self.page.update()
+                    if i % 10 == 0 or i == total_files:
+                        self.update_status(f"🚶 Processing workout routes... ({i}/{total_files})")
+                    
                     # Determine activity type for this GPX file
                     activity_type = self.match_gpx_to_activity(gpx_file.name, workout_activities)
                     
@@ -502,11 +558,22 @@ class GPXWorkbenchApp:
             logger.info(f"Extracted {copied_count} GPX files from export.zip")
             
             # Clean up extraction directory
+            self.progress_text.value = "🧹 Cleaning up..."
+            self.update_status("🧹 Cleaning up...")
+            self.page.update()
+            time.sleep(0.1)
             shutil.rmtree(extract_dir)
             
-            # Update the status in the UI if it's ready
-            if hasattr(self, 'status_text'):
-                self.update_status(f"Auto-extracted {copied_count} routes from Downloads/export.zip")
+            # Hide progress indicator
+            self.progress_container.visible = False
+            self.progress_ring.visible = False
+            self.progress_bar.visible = False
+            self.progress_text.visible = False
+            
+            # Update final status and refresh file list
+            self.update_status(f"✅ Auto-extracted {copied_count} routes from Downloads/export.zip")
+            self.page.update()
+            self.refresh_file_list(None)
             
         except Exception as e:
             logger.error(f"Error auto-extracting health export: {e}")
@@ -545,10 +612,51 @@ class GPXWorkbenchApp:
             border_radius=5
         )
         
+        # Progress indicator container (shown during export extraction)
+        self.progress_container = ft.Container(
+            content=ft.Column([
+                ft.Text("Processing export.zip", size=20, weight=ft.FontWeight.BOLD, color=ft.colors.BLUE_700),
+                ft.Row([self.progress_ring, self.progress_text], alignment=ft.MainAxisAlignment.CENTER),
+                self.progress_bar
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=20,
+            bgcolor=ft.colors.BLUE_50,
+            border_radius=10,
+            border=ft.border.all(2, ft.colors.BLUE_300),
+            visible=self.has_export_zip  # Show immediately if export.zip exists
+        )
+        
+        # Info container for when files already exist
+        self.info_container = ft.Container(
+            content=ft.Row([
+                ft.Icon(ft.icons.CHECK_CIRCLE, color=ft.colors.GREEN_700, size=30),
+                ft.Text(
+                    f"✅ Found {self.existing_files_count} existing GPX file{'s' if self.existing_files_count != 1 else ''} in temp directory",
+                    size=16,
+                    weight=ft.FontWeight.BOLD,
+                    color=ft.colors.GREEN_700
+                )
+            ], alignment=ft.MainAxisAlignment.CENTER),
+            padding=15,
+            bgcolor=ft.colors.GREEN_50,
+            border_radius=10,
+            border=ft.border.all(2, ft.colors.GREEN_300),
+            visible=(self.existing_files_count > 0 and not self.has_export_zip)
+        )
+        
+        # Set initial progress state if export.zip found
+        if self.has_export_zip:
+            logger.info("Setting initial progress state - export.zip will be processed")
+            self.progress_ring.visible = True
+            self.progress_text.visible = True
+            self.progress_text.value = "🔍 Preparing to extract export.zip..."
+        
         # Layout
         self.page.add(
             header,
             ft.Divider(),
+            self.progress_container,
+            self.info_container,
             instructions,
             ft.Divider(),
             file_picker_section,
