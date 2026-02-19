@@ -4,13 +4,14 @@ A single-screen Flet application for processing GPX routes exported from iPhone 
 
 ## Features
 
-- 📱 **iPhone Health Export Instructions**: Step-by-step guide for exporting health data
+- 📱 **iPhone Health Export Instructions**: Step-by-Step guide for exporting health data
 - 📁 **File Management**: Import and manage GPX route files with FilePicker
 - ✅ **File Selection**: Select/deselect specific route files for processing
 - 🗺️ **Route Visualization**: Map routes using interactive Folium maps
 - ⚡ **Speed Tags**: Automatically calculate and add speed data to trackpoints
 - ✂️ **Smart Trimming**: Remove points with excessive speed (configurable threshold)
-- 📤 **Hikes Integration**: Post processed routes to Hikes API
+- 📤 **Hikes Integration**: Post processed routes to local Hikes blog repository
+- 🌤️ **Historical Weather Lookup**: Fetch weather conditions by GPX location and timestamp during posting
 - 💾 **Persistent Data**: Save settings and preferences
 - 📝 **Comprehensive Logging**: Track all operations with detailed logs
 
@@ -42,7 +43,7 @@ pip install -r requirements.txt
 
 ### Quick Start with run.sh (macOS/Linux)
 
-The easiest way to run the application is using the provided `run.sh` script:
+Run the application with the provided `run.sh` script:
 
 ```bash
 ./run.sh
@@ -63,11 +64,11 @@ chmod +x run.sh
 ./run.sh
 ```
 
-**Note**: The `run.sh` script handles everything for you. You don't need to manually create the virtual environment or install dependencies!
+**Note**: The `run.sh` script handles environment setup and dependency installation automatically.
 
 ### Manual Launch (Alternative)
 
-If you prefer to run the application manually:
+To run the application manually:
 
 ```bash
 # Activate virtual environment first
@@ -79,7 +80,7 @@ source .venv/bin/activate  # On macOS/Linux
 python main.py
 ```
 
-The application will open in a new window or web browser.
+The application opens in a new window or web browser.
 
 ### Exporting iPhone Health Data
 
@@ -103,8 +104,8 @@ Alternatively, you can manually:
 2. **Select Routes**: Use checkboxes to select which routes to process, or use "Select All"/"Deselect All"
 3. **Visualize**: Click "🗺️ Visualize Routes" to create an interactive map (saved as HTML)
 4. **Add Speed Tags**: Click "⚡ Add Speed Tags" to calculate speed between points
-5. **Trim by Speed**: Set max speed threshold in mph (default: 5 mph) and click "✂️ Trim by Speed" to remove slow-moving GPS drift points
-6. **Post to Hikes**: Enter your Hikes API URL and click "📤 Post to Hikes"
+5. **Trim by Speed**: Set max speed threshold in MPH (default: 5 mph) and click "✂️ Trim by Speed" to remove slow-moving GPS drift points
+6. **Post to Hikes Blog**: Ensure `~/GitHub/hikes` exists, then click "📤 Post to Hikes Blog" (includes reverse-geocoded location and historical weather in front matter)
 
 ## File Structure
 
@@ -125,7 +126,6 @@ gpx-routes-workbench-using-flet/
 ### Persistent Data Storage
 Settings and preferences are automatically saved to `app_data.json`, including:
 - Temporary directory path
-- Hikes API URL
 - Selected files
 
 ### Logging
@@ -142,6 +142,9 @@ Calculates speed between consecutive points based on:
 
 ### Speed-Based Trimming
 Removes GPS points with unrealistic speeds. Default threshold is 5 mph, which helps filter out GPS drift and errors when the device is stationary or moving very slowly. Useful for cleaning up routes where the GPS recorded movement while you were actually standing still.
+
+### Historical Weather Lookup
+When posting routes, the app fetches historical weather near the track center and first GPX timestamp using the Open-Meteo archive API. If weather data is unavailable, it falls back to "Weather data not available".
 
 ## Testing
 

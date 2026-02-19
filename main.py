@@ -11,7 +11,7 @@ import shutil
 import zipfile
 import webbrowser
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Dict, Optional
 import gpxpy
@@ -1349,6 +1349,67 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
         except Exception as e:
             logger.warning(f"Could not identify location: {e}")
             return "Unknown Location"
+
+    def fetch_historical_weather(self, lat: float, lon: float, dt: datetime) -> str:
+        """Fetch historical weather near the GPX timestamp using Open-Meteo archive API"""
+        try:
+            if dt.tzinfo is None:
+                dt_utc = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt_utc = dt.astimezone(timezone.utc)
+
+            date_str = dt_utc.strftime('%Y-%m-%d')
+            target_epoch = int(dt_utc.timestamp())
+
+            params = {
+                'latitude': lat,
+                'longitude': lon,
+                'start_date': date_str,
+                'end_date': date_str,
+                'hourly': 'temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,precipitation',
+                'temperature_unit': 'fahrenheit',
+                'wind_speed_unit': 'mph',
+                'precipitation_unit': 'inch',
+                'timezone': 'GMT',
+                'timeformat': 'unixtime'
+            }
+
+            response = requests.get('https://archive-api.open-meteo.com/v1/archive', params=params, timeout=15)
+            response.raise_for_status()
+            payload = response.json()
+
+            hourly = payload.get('hourly', {})
+            times = hourly.get('time', [])
+            temperatures = hourly.get('temperature_2m', [])
+            apparent_temperatures = hourly.get('apparent_temperature', [])
+            humidities = hourly.get('relative_humidity_2m', [])
+            wind_speeds = hourly.get('wind_speed_10m', [])
+            precipitations = hourly.get('precipitation', [])
+
+            if not times:
+                logger.warning(f"No hourly weather data returned for ({lat}, {lon}) on {date_str}")
+                return "Weather data not available"
+
+            nearest_index = min(range(len(times)), key=lambda index: abs(times[index] - target_epoch))
+
+            temperature = temperatures[nearest_index] if nearest_index < len(temperatures) else None
+            apparent_temperature = apparent_temperatures[nearest_index] if nearest_index < len(apparent_temperatures) else None
+            humidity = humidities[nearest_index] if nearest_index < len(humidities) else None
+            wind_speed = wind_speeds[nearest_index] if nearest_index < len(wind_speeds) else None
+            precipitation = precipitations[nearest_index] if nearest_index < len(precipitations) else None
+
+            if None in (temperature, apparent_temperature, humidity, wind_speed, precipitation):
+                logger.warning(f"Incomplete hourly weather values for ({lat}, {lon}) at index {nearest_index}")
+                return "Weather data not available"
+
+            return (
+                f"{temperature:.1f}&deg;F (wind chill={apparent_temperature:.1f}) "
+                f"with {humidity:.1f}% humidity and winds at {wind_speed:.1f} mph. "
+                f"Hourly precipitation of {precipitation:.2f} inches."
+            )
+        except Exception as e:
+            logger.warning(f"Could not fetch weather for ({lat}, {lon}) at {dt}: {e}")
+            return "Weather data not available"
     
     def post_to_hikes(self, e):
         """Post selected routes to Hikes blog repository"""
@@ -1384,6 +1445,7 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                     continue
                 
                 place = self.identify_place(center[0], center[1])
+                weather = self.fetch_historical_weather(center[0], center[1], dt)
                 
                 # Extract activity type from filename (e.g., walking_2025-10-10_2.40pm.gpx)
                 mode = "Walking"  # Default mode
@@ -1417,7 +1479,7 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                     md_file.write("trashBags: false\n")
                     md_file.write("trashRecyclables: false\n")
                     md_file.write("trashWeight: false\n")
-                    md_file.write("weather: Weather data not available\n")
+                    md_file.write(f"weather: {weather}\n")
                     md_file.write("---\n")
                     
                     # Write leaflet map shortcodes

@@ -18,15 +18,15 @@ python main.py
 2. **Import GPX Files** into the app
 3. **Select Routes** you want to process
 4. **Process Routes** using the available tools
-5. **Export or Upload** the processed routes
+5. **Post to Hikes Blog** (optional)
 
 ## Detailed Instructions
 
 ### Exporting iPhone Health Data
 
-The app displays these instructions on startup, but here's a detailed guide:
+The app displays these instructions on startup; this section provides a detailed guide.
 
-#### Step-by-Step Process:
+#### Step-by-Step Process
 
 1. **Open Health App**
    - Launch the Health app on your iPhone
@@ -74,10 +74,10 @@ The app displays these instructions on startup, but here's a detailed guide:
    - Select one or more `.gpx` files
    - Click "Open"
 
-2. **Files are Copied**
+2. **Files Are Copied**
    - Selected files are copied to `temp_gpx_routes/` directory
    - Original files remain unchanged
-   - You can safely work with copies
+   - Work with copies safely
 
 #### Selecting Routes
 
@@ -142,47 +142,50 @@ Speed (m/s) = Distance / Time
 **What it does:**
 - Removes GPS points with unrealistic speeds
 - Filters out GPS errors and glitches
-- Default threshold: 50 m/s (≈180 km/h)
+- Default threshold: 5 mph
 
 **How to use:**
-1. Set max speed in "Max Speed (m/s)" field
+1. Set max speed in "Max Speed (MPH)" field
 2. Select routes to trim
 3. Click "✂️ Trim by Speed"
 4. New files created with `_trimmed.gpx` suffix
 
 **Speed Reference:**
-- Walking: 1-2 m/s
-- Running: 3-6 m/s
-- Cycling: 5-15 m/s
-- Driving: 10-30 m/s
-- Highway: 20-40 m/s
+- Walking: 2-4 mph
+- Running: 5-12 mph
+- Cycling: 8-25 mph
+- Driving: 25-70 mph
+- Highway: 55-80 mph
 
 **Recommended thresholds:**
-- Walking/Hiking: 5-10 m/s
-- Running: 15-20 m/s
-- Cycling: 30-40 m/s
-- Any activity: 50 m/s (default)
+- Walking/Hiking: 5-10 mph
+- Running: 12-20 mph
+- Cycling: 20-35 mph
+- Mixed activities: 15-30 mph
 
-##### 4. Post to Hikes (📤)
+##### 4. Post to Hikes Blog (📤)
 
 **What it does:**
-- Uploads selected GPX files to a Hikes API
-- Sends files as multipart form data
-- Saves API URL for future use
+- Generates hike markdown files in your local Hikes repo
+- Copies GPX files to the Hikes static gpx directory
+- Performs git pull/add/commit/push in the Hikes repo
+- Adds reverse-geocoded location and historical weather to generated frontmatter
 
 **How to use:**
-1. Enter your Hikes API URL in the text field
-   - Example: `https://api.example.com/hikes`
-2. Select routes to upload
-3. Click "📤 Post to Hikes"
+1. Ensure your Hikes repository exists at `~/GitHub/hikes`
+2. Select routes to post
+3. Click "📤 Post to Hikes Blog"
 
-**API Format:**
-- Method: POST
-- Content-Type: multipart/form-data
-- Field name: 'gpx'
-- File type: application/gpx+xml
+**Output Paths:**
+- Markdown: `~/GitHub/hikes/content/hikes/YYYY/MM/*.md`
+- GPX: `~/GitHub/hikes/static/gpx/YYYY/MM/*.gpx`
 
-**Note:** Adjust the API integration in `main.py` if your API uses a different format.
+**Git Behavior:**
+- Runs `git pull`, `git add .`, `git commit`, and `git push` after posting files.
+
+**Weather Details:**
+- During posting, the app looks up historical weather near the GPX track center and first timestamp using the Open-Meteo archive API.
+- If lookup fails or data is incomplete, it falls back to `Weather data not available`.
 
 ### File Management
 
@@ -211,13 +214,13 @@ Speed (m/s) = Distance / Time
 
 **Saved Settings:**
 - Temporary directory path
-- Hikes API URL
+- Selected files
 - Last export date
 
 **File:** `app_data.json`
 
 **Auto-saved when:**
-- Hikes API URL is entered
+- File selections change
 - App exits normally
 
 ### Logging
@@ -253,18 +256,18 @@ Speed (m/s) = Distance / Time
    - Add speed tags first
    - Visualize to check data
    - Then trim if needed
-   - Finally upload
+   - Finally post to Hikes Blog
 
 4. **Check the Map**
-   - Always visualize before uploading
+   - Always visualize before posting
    - Look for GPS errors (straight lines, jumps)
    - Verify route makes sense
 
 5. **Use Appropriate Speed Thresholds**
-   - Walking: 5 m/s
-   - Running: 15 m/s  
-   - Cycling: 30 m/s
-   - Mixed activities: 50 m/s
+   - Walking: 5-10 mph
+   - Running: 12-20 mph
+   - Cycling: 20-35 mph
+   - Mixed activities: 15-30 mph
 
 ### Common Issues
 
@@ -292,7 +295,7 @@ Process multiple routes efficiently:
 5. Select only `_speed.gpx` files (manually)
 6. Trim by Speed → Creates `_trimmed.gpx` files
 7. Select trimmed files
-8. Post to Hikes
+8. Post to Hikes Blog
 
 #### Manual File Management
 
@@ -304,8 +307,8 @@ You can manually add GPX files to `temp_gpx_routes/`:
 #### Customizing the Map
 
 Edit `main.py` to customize map appearance:
-- Change colors (line 491)
-- Adjust zoom level (line 483)
+- Change route colors
+- Adjust zoom level
 - Add markers or popups
 - Change map tile provider
 
@@ -327,12 +330,12 @@ Edit `main.py` to customize map appearance:
 2. Select: bike_ride.gpx
 3. Click: ⚡ Add Speed Tags
 4. Select: bike_ride_speed.gpx
-5. Set max speed: 30 (m/s for cycling)
+5. Set max speed: 30 mph (for cycling)
 6. Click: ✂️ Trim by Speed
 7. Result: bike_ride_speed_trimmed.gpx (cleaned)
 ```
 
-### Example 3: Batch Upload
+### Example 3: Batch Post to Hikes
 
 ```
 1. Import: Multiple hike files
@@ -340,15 +343,14 @@ Edit `main.py` to customize map appearance:
 3. Add speed tags to all
 4. Click: Deselect All
 5. Manually select: *_speed.gpx files
-6. Click: ✂️ Trim by Speed (max: 10 m/s)
+6. Click: ✂️ Trim by Speed (max: 10 mph)
 7. Select: *_trimmed.gpx files
-8. Enter API URL
-9. Click: 📤 Post to Hikes
+8. Click: 📤 Post to Hikes Blog
 ```
 
 ## Keyboard Shortcuts
 
-None currently implemented, but you can use:
+No app-specific shortcuts are currently implemented. Standard controls still work:
 - **Tab**: Navigate between controls
 - **Space**: Toggle checkboxes
 - **Enter**: Activate buttons
