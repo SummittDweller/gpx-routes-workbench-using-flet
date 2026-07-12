@@ -1425,11 +1425,17 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
             return
         
         posted_count = 0
+        missing_files_count = 0
         
         for filename in self.selected_files:
             file_path = os.path.join(self.temp_dir, filename)
             
             try:
+                if not os.path.exists(file_path):
+                    missing_files_count += 1
+                    logger.warning(f"Skipping missing file: {file_path}")
+                    continue
+
                 # Parse GPX file
                 gpx = self.processor.parse_gpx(file_path)
                 if not gpx:
@@ -1504,14 +1510,33 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                 import subprocess
                 cwd = os.getcwd()
                 os.chdir(hikes_path)
-                
-                subprocess.run(['git', 'pull'], check=True)
+
+                # Pull only the current branch to avoid ambiguous multi-branch pulls.
+                current_branch = subprocess.check_output(
+                    ['git', 'branch', '--show-current'], text=True
+                ).strip() or 'main'
+                subprocess.run(['git', 'pull', '--ff-only', 'origin', current_branch], check=True)
+
                 subprocess.run(['git', 'add', '.'], check=True)
-                subprocess.run(['git', 'commit', '-m', f'Posted {posted_count} routes from GPX Routes Workbench'], check=True)
-                subprocess.run(['git', 'push'], check=True)
-                
+
+                has_staged_changes = subprocess.run(
+                    ['git', 'diff', '--cached', '--quiet'],
+                    check=False
+                ).returncode != 0
+
+                if has_staged_changes:
+                    subprocess.run(
+                        ['git', 'commit', '-m', f'Posted {posted_count} routes from GPX Routes Workbench'],
+                        check=True
+                    )
+                    subprocess.run(['git', 'push', 'origin', current_branch], check=True)
+
                 os.chdir(cwd)
-                self.update_status(f"Successfully posted {posted_count} route(s) to Hikes and pushed to GitHub")
+
+                if has_staged_changes:
+                    self.update_status(f"Successfully posted {posted_count} route(s) to Hikes and pushed to GitHub")
+                else:
+                    self.update_status(f"Posted {posted_count} route(s); no git changes to commit")
                 
             except subprocess.CalledProcessError as e:
                 logger.error(f"Git error: {e}")
@@ -1522,7 +1547,10 @@ Note: The workout-routes folder contains individual .gpx files for each recorded
                 os.chdir(cwd)
                 self.update_status(f"Posted {posted_count} file(s) but git operations failed")
         else:
-            self.update_status("No files were posted")
+            if missing_files_count > 0:
+                self.update_status(f"No files were posted ({missing_files_count} selected file(s) were missing)")
+            else:
+                self.update_status("No files were posted")
     
     def update_status(self, message: str):
         """Update status text"""
